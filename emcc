@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+
+#-----------------------------------------------------------------------#
+# to be able to exit entire program from within function
+
+trap "exit 1" TERM
+export TOP_PID=$$
+
+#-----------------------------------------------------------------------#
+# prints script name, warns about changes, prompts for input to continue
+
+startupWarning () {
+  echo -e "\nEvolving Music Collection Cleanup (emcc):"
+  echo -e "Directory: $rootPath\n"
+  echo -e "This script moves, renames, edits files within this directory.\n"
+
+  read -r -p "Continue with script? [y/N] " response
+  if [[ "$response" =~ ^([yY][eE][sS]|[yY])+$ ]]; then
+    echo -e "OK. Running script..."
+  else
+    echo -e "OK. Exiting.\n"
+    kill -s TERM $TOP_PID
+  fi
+}
+
+#-----------------------------------------------------------------------#
+# remove hidden directories as they likely contain unzip fragments
+
+removeHiddenDirectories () {
+  hidden=`find "$1" -type d -regextype posix-egrep -iregex ".+/\..+$"`
+  if [ "$hidden" != "" ]; then
+    echo -e "Hidden directories:"
+    IFS=$'\n'; hiddendirs=("$hidden"); unset IFS
+    for d in "${hiddendirs[@]}"; do
+      echo -e "$d"
+    done
+    echo ""
+
+    read -r -p "Remove hidden directories? [y/N] " response
+    if [[ "$response" =~ ^([yY][eE][sS]|[yY])+$ ]]; then
+      for d in "${hiddendirs[@]}"; do
+        echo -e "Deleting: $d"
+        rm -r "$d"
+      done
+    fi
+  fi
+}
+
+#-----------------------------------------------------------------------#
+# validates artist: can only contain certain characters
+
+validArtist () {
+  match=`echo "$1" | grep -o "[^A-Za-z0-9,' &]\+"`
+  if [ "$match" = "" ]; then echo "$1"; fi
+}
+
+#-----------------------------------------------------------------------#
+# only audio files within a folder path (1 level at a time)
+
+findAudio () {
+  find "$1" -maxdepth 1 -type f  -regextype posix-egrep \
+  -iregex ".+\.(mp3|flac|m4a|mp4|shn|wav)$" | sort
+}
+
+#-----------------------------------------------------------------------#
+# album tag from audio file using ffprobe
+
+id3Get () {
+  ffprobe -loglevel error -show_entries format_tags="$1" \
+  -of default=noprint_wrappers=1:nokey=1 "$2"
+}
+
+#-----------------------------------------------------------------------#
+# date helpers
+
+parseDayMon () {
+  echo "$1" | grep -o "^[0-9]\{1,2\}" | sed 's/^0*//' | xargs printf %02d
+}
+
+parseYear () {
+  echo "$1" | grep -o "^[0-9]\{4\}"
+}
+
+nextDate () {
+  echo "$1" | sed -r "s/^[0-9]{1,4}[/.-]{1}//"
+}
+
+#-----------------------------------------------------------------------#
+# if date matched, can update folder/tags
+
+matchDateInAlbum () {
+  # match: 2000.01.01 2000/1/1 2000-1-01
+  # also match: 2000.01.01-03, 2000.01.01,03
+  m3="[-,]\{0,1\}[0-9]\{0,2\}"
+  match="^[0-9]\{4\}[/.-]\{1\}[0-9]\{1,2\}[/.-]\{1\}[0-9]\{1,2\}$m3$m3"
+  m1=`echo "$1" | grep -o "$match"`
+  if [ "$m1" != "" ]; then
+    year=`parseYear "$m1"`
+    m2=`nextDate "$m1"`; mon=`parseDayMon "$m2"`; m2=`nextDate "$m2"`
+    day=`echo "$m2" | grep -o "^[0-9]\{1,2\}$m3$m3" | sed -e "s/[^0-9]\+$//"`
+  fi
+
+  # match: 01.01.2000 1/1/2000 1-01-2000
+  if [ "$m1" = "" ]; then
+    match="^[0-9]\{1,2\}[/.-]\{1\}[0-9]\{1,2\}[/.-]\{1\}[0-9]\{4\}"
+    m1=`echo "$1" | grep -o "$match"`
+    if [ "$m1" != "" ]; then
+      mon=`parseDayMon "$m1"`; m2=`nextDate "$m1"`
+      day=`parseDayMon "$m2"`; m2=`nextDate "$m2"`
+      year=`parseYear "$m2"`
+    fi
+  fi
+
+  # match: studio album - starts with YEAR then space in tag
+  if [ "$m1" = "" ]; then
+    m1=`echo "$1" | grep -o "^[0-9]\{4\}\s\+"`
+    if [ "$m1" != "" ]; then
+      year=`echo "$m1" | sed -e 's/\s\+//g'`
+    fi
+  fi
+
+  # return if did not match anything
+  if [ "$m1" = "" ]; then echo ""; exit 1; fi
+
+  # remove date match from beginning album name
+  alb=`echo "$1" | sed -r "s/^.{${#m1}}//"`
+
+  # remove junk from beginning & end
+  alb=`echo "$alb" | sed -e "s/^[^A-Za-z]\+//" -e "s/[^A-Za-z0-9\)]\+$//"`
+
+  # remove I, II, III, IV, V from beginning
+  alb=`echo "$alb" | sed -e "s/I*[IV]\+ //" -e "s/^[^A-Za-z]\+//"`
+
+  # remove CD1, disc1, disc 1, cd 1 from end
+  alb=`echo "$alb" | sed -e "s/[cC][dD]\s*[0-9]*//" \
+  -e "s/[dD][iI][sS][cC]\s*[0-9]*//" -e "s/[^A-Za-z0-9\)]\+$//"`
+
+  # replace any character not allowed with -
+  alb=`echo "$alb" | sed -e "s/[^A-Za-z0-9 .,-&]\+/-/g"`
+
+  # replace duplicate - & duplicate spaces
+  alb=`echo "$alb" | sed -e "s/-\+/-/g" -e "s/\s\+/ /g"`
+
+  # replace ', Ny' with ', NY'
+  alb=`echo "$alb" | sed -e 's/, .\{2\}\s/\U&/g' -e 's/, .\{2\}$/\U&/g'`
+
+  # check that file extension is at end if FLAC
+
+  # return in YEAR-MON-DAY format
+  echo "$year.$mon.$day $alb"
+}
+
+#-----------------------------------------------------------------------#
+# process sub-folders containing audio files
+# $1 = $artist
+# $2 = path with artist
+
+processFiles () {
+  IFS=$'\n'; files=(`findAudio "$rootPath/$2"`); unset IFS
+  if [ "${#files[@]}" -gt "0" ]; then
+
+    # try: get album from embedded tag
+    for f in "${files[@]}"; do
+      album=`id3Get "album" "$f"`
+      break
+    done
+
+    # parse album name from path
+    albumPath=`echo "$2" | sed -r "s/^.{${#1}}\///"`
+    albumPath=`echo "$albumPath" | rev | sed -e "s/\/.\+//" | rev`
+
+    albumDate=`matchDateInAlbum "$album"`
+    if [ "$albumDate" != "" ]; then
+      if [ "$album" = "$albumDate" ]; then
+        echo -e "${#files[@]} files: in album '$album' are OK!"
+      else
+        echo -e "${#files[@]} files: in album '$album' move to: '$albumDate'"
+      fi
+    else
+      # file does not contain 'album' tag
+      echo -e "move: '$2' to '$unknown'"
+    fi
+  fi
+}
+
+#-----------------------------------------------------------------------#
+# process root directory: list of artists
+
+processIndex () {
+  index="0"
+  for p in "${paths[@]}"; do
+    # trim $rootPath from path
+    p=`echo "$p" | sed -r "s/^.{${#rootPath}}\///"`
+
+    # skip $rootPath and $unknown directory
+    if [ "$p" = "$unknown" -o "$p" = "$rootPath" ]; then
+      index=$((index+1)); continue
+    fi
+
+    isSubDir=`echo "$p" | grep -o '.\+/.\+'`
+    if [ "$isSubDir" != "" ]; then
+      # a subdirectory of artist
+      processFiles "$artist" "$p" "$index"
+    else
+      artist=`validArtist "$p"`
+      if [ "$artist" != "" ]; then
+        echo -e "\nArtist: $artist"
+      else
+        echo "move: '$p' to: '$unknown'"
+      fi
+    fi
+
+    # increment index
+    index=$((index+1))
+  done
+}
+
+#-----------------------------------------------------------------------#
+# main
+
+if [ $# -ne 1 ]; then
+  echo -e "\nUsage: emcc [path]\n"; exit 1
+fi
+
+if [ ! -d "$1" ]; then
+  echo -e "\nError: '$1' not a directory\n"; exit 1
+fi
+
+rootPath="$1"
+
+# move folders here that dont match the known pattern
+unknown="000 NEEDS WORK"
+
+startupWarning
+removeHiddenDirectories "$rootPath"
+
+IFS=$'\n'; paths=(`find "$rootPath" -type d | sort`); unset IFS
+processIndex
+
+echo -e "\nemcc finished. Exiting.\n"
