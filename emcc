@@ -47,6 +47,28 @@ removeHiddenDirectories () {
 }
 
 #-----------------------------------------------------------------------#
+# make sure required software is installed
+
+checkPreReq () {
+  valid="true"
+
+  if [ "$(type 'ffprobe' 2> /dev/null)" = "" ]; then
+    echo -e "\nError: please install 'ffprobe' part of 'ffmpeg'!"
+    valid="false"
+  fi
+
+  if [ "$(type 'eyeD3' 2> /dev/null)" = "" ]; then
+    echo -e "\nError: please install 'eyeD3'!"
+    valid="false"
+  fi
+
+  if [ "$valid" != "true" ]; then
+    echo -e "Exiting.\n"
+    kill -s TERM $TOP_PID
+  fi
+}
+
+#-----------------------------------------------------------------------#
 # validates artist: can only contain certain characters
 
 validArtist () {
@@ -71,14 +93,17 @@ id3Get () {
 }
 
 #-----------------------------------------------------------------------#
+
+getBitrate () {
+  ffprobe -v error -show_entries format=bit_rate "$1" | \
+  grep -o "bit_rate=[0-9]\+" | sed -e "s/bit_rate=//"
+}
+
+#-----------------------------------------------------------------------#
 # date helpers
 
 parseDayMon () {
   echo "$1" | grep -o "^[0-9]\{1,2\}" | sed 's/^0*//' | xargs printf %02d
-}
-
-parseYear () {
-  echo "$1" | grep -o "^[0-9]\{4\}"
 }
 
 nextDate () {
@@ -98,7 +123,7 @@ matchDate () {
   match="$2[0-9]\{4\}[/.-]\{1\}[0-9]\{1,2\}[/.-]\{1\}[0-9]\{1,2\}$m0$m0$3"
   m1=`echo "$1" | grep -o "$match"`
   if [ "$m1" != "" ]; then
-    year=`parseYear "$m1"`; m1=`nextDate "$m1"`
+    year=`echo "$m1" | grep -o "^[0-9]\{4\}"`; m1=`nextDate "$m1"`
     mon=`parseDayMon "$m1"`; m1=`nextDate "$m1"`
     day=`echo "$m1" | grep -o "^[0-9]\{1,2\}$m0$m0" | sed -e "s/[^0-9]\+$//"`
   fi
@@ -110,7 +135,7 @@ matchDate () {
     if [ "$m1" != "" ]; then
       mon=`parseDayMon "$m1"`; m1=`nextDate "$m1"`
       day=`parseDayMon "$m1"`; m1=`nextDate "$m1"`
-      year=`parseYear "$m1"`
+      year=`echo "$m1" | grep -o "^[0-9]\{4\}"`
     fi
   fi
 
@@ -152,7 +177,8 @@ capitalizeStateCode () {
   sd tn tx ut vt va wa wv wi wy"
 
   # convert state code list into regexp match
-  scR=`echo "\($codes\)" | sed -e ':a;N;$!ba;s/\n/ /g' -e "s/\s\+/\\\\\\\|/ig"`
+  scR=`echo "\($codes\)" | sed -e ':a;N;$!ba;s/\n/ /g' \
+  -e "s/\s\+/\\\\\\\|/ig"`
 
   echo "$1" | sed -e "s/, $scR\s/\U&/ig" -e "s/, $scR$/\U&/ig"
 }
@@ -212,10 +238,10 @@ matchDateInAlbum () {
   # remove junk from beginning & end
   alb=`echo "$alb" | sed -e "s/^[^A-Za-z]\+//" -e "s/[^A-Za-z0-9\)]\+$//"`
 
-  # replace $artist from within $alb
-  alb=`echo "$alb" | sed -e "s/^$1//ig" -e "s/\s+//g"`
+  # replace ^$artist from within $alb
+  alb=`echo "$alb" | sed -e "s/^$1//ig" -e "s/^[^A-Za-z]\+//"`
 
-  # if $alb only contains date, look to album tag, split before first -
+  # if $alb is blank, look to album tag, split before first -
   if [ "$alb" = "" ]; then
     if [ "$(echo $2 | grep -o '.\+ -')" != "" ]; then
       alb=`echo "$2" | grep -o ".\+ -" | sed -e "s/ -$//"`
@@ -232,7 +258,8 @@ matchDateInAlbum () {
   -e "s/[dD][iI][sS][cC]\s*[0-9]*//" -e "s/[^A-Za-z0-9\)]\+$//"`
 
   # replace any character not allowed with -
-  alb=`echo "$alb" | sed -e "s/()//g" -e "s/\*//g" -e "s/[^A-Za-z0-9 .,-&]\+/-/g"`
+  alb=`echo "$alb" | sed -e "s/()//g" -e "s/\*//g" \
+  -e "s/[^A-Za-z0-9 .,-&]\+/-/g"`
 
   # replace duplicate - & duplicate spaces
   alb=`echo "$alb" | sed -e "s/-\+/-/g" -e "s/\s\+/ /g"`
@@ -249,42 +276,88 @@ matchDateInAlbum () {
 }
 
 #-----------------------------------------------------------------------#
+# move path structure into NEEDS_WORK path
+
+moveToUnknown() {
+  echo -e "move: '$1' to: '$unknown'\n"
+}
+
+#-----------------------------------------------------------------------#
+# $1 = path
+# $2 = artist
+# $3 = album
+
+updateTags () {
+  echo "album tag: update to: '$3'"
+}
+
+#-----------------------------------------------------------------------#
+# $1 = path
+# $2 = artist
+# $3 = album
+
+updatePath () {
+  echo "path: update to: '$matchAlbum'"
+}
+
+#-----------------------------------------------------------------------#
 # process sub-folders containing audio files
 # $1 = $artist
-# $2 = path with artist
+# $2 = path w/o artist
 # $3 = current index in directories
 
-processFiles () {
-  IFS=$'\n'; files=(`findAudio "$rootPath/$2"`); unset IFS
+processDirectory () {
+  IFS=$'\n'; files=(`findAudio "$rootPath/$1/$2"`); unset IFS
   if [ "${#files[@]}" -gt "0" ]; then
 
-    # try: get album from embedded tag
+    # try: get embedded album tag from first audio file
     for f in "${files[@]}"; do
       albumTag=`id3Get "album" "$f"`
       break
     done
 
-    # parse album name from path
-    path=`echo "$2" | sed -r "s/^.{${#1}}\///"`
-    dirName=`echo "$path" | rev | sed -e "s/\/.\+//" | rev`
+    # last directory name
+    dirName=`echo "$2" | rev | sed -e "s/\/.\+//" | rev`
 
     # match date in tag & full path
-    matchAlbum=`matchDateInAlbum "$1" "$albumTag" "$path" "$dirName"`
+    matchAlbum=`matchDateInAlbum "$1" "$albumTag" "$2" "$dirName"`
     if [ "$matchAlbum" != "" ]; then
+      echo "${#files[@]} files: in '$2'"
+
+      # check album tag
       if [ "$albumTag" = "$matchAlbum" ]; then
-        echo -e "${#files[@]} files: in '$path' are OK!"
+        echo "album tag: OK"
       else
-        echo -e "${#files[@]} files: in '$path' update to: '$matchAlbum'"
+        updateTags "$2" "$1" "$matchAlbum"
       fi
+
+      # add audio file .ext to path if bitrate >320
+      bitrate=`getBitrate "${files[0]}"`
+      if [ "$bitrate" -gt "375000" ]; then
+        # must be flac or better; include in album
+        ext=`echo "${files[0]}" | grep -o "\.[A-Za-z0-9]\+$" | \
+        sed -e "s/^\.//" -e "s/./\U&/ig"`
+        matchAlbum="$matchAlbum - $ext"
+      fi
+
+      # check folder name
+      if [ "$dirName" = "$matchAlbum" ]; then
+        echo "path: OK"
+      else
+        updatePath "$2" "$1" "$matchAlbum"
+      fi
+
+      echo ""
     else
-      # did not find date with tag / full path
-      echo -e "move: '$2' to '$unknown'"
+      moveToUnknown "$2"
     fi
   fi
 }
 
 #-----------------------------------------------------------------------#
-# process root directory: list of artists
+# process root directory
+# sets: $artist for each top level directory
+# calls: processDirectory() for each $artist sub-directory
 
 processIndex () {
   index="0"
@@ -301,13 +374,17 @@ processIndex () {
     if [ "$isSubDir" = "" ]; then
       artist=`validArtist "$p"`
       if [ "$artist" != "" ]; then
-        echo -e "\nArtist: $artist"
+        echo -e "\nArtist: $artist\n"
       else
-        echo "move: '$p' to: '$unknown'"
+        moveToUnknown "$p"
       fi
-    else
-      # subdirectory of $artist (comes after in sort order)
-      processFiles "$artist" "$p" "$index"
+    else # subdirectory of $artist (comes after in sorted array)
+      # make sure directory path still exists
+      if [ -d "$rootPath/$p" ]; then
+        # trim artist from path
+        p=`echo "$p" | sed -r "s/^.{${#artist}}\///"`
+        processDirectory "$artist" "$p" "$index"
+      fi
     fi
 
     # increment index
@@ -331,6 +408,7 @@ rootPath="$1"
 # move folders here that dont match the known pattern
 unknown="000 NEEDS WORK"
 
+checkPreReq
 startupWarning
 #removeHiddenDirectories "$rootPath"
 
