@@ -86,44 +86,80 @@ nextDate () {
 }
 
 #-----------------------------------------------------------------------#
-# if date matched, can update folder/tags
+# $1 = string to match
+# $2 = prepend ie ^ (start of string)
+# $3 = append ie $ (end of string)
 
-matchDateInAlbum () {
+matchDate () {
   # match: 2000.01.01 2000/1/1 2000-1-01
-  # also match: 2000.01.01-03, 2000.01.01,03
-  m3="[-,]\{0,1\}[0-9]\{0,2\}"
-  match="^[0-9]\{4\}[/.-]\{1\}[0-9]\{1,2\}[/.-]\{1\}[0-9]\{1,2\}$m3$m3"
+  m0="[-,]\{0,1\}[0-9]\{0,2\}"
+  match="$2[0-9]\{4\}[/.-]\{1\}[0-9]\{1,2\}[/.-]\{1\}[0-9]\{1,2\}$m0$m0$3"
   m1=`echo "$1" | grep -o "$match"`
   if [ "$m1" != "" ]; then
-    year=`parseYear "$m1"`
-    m2=`nextDate "$m1"`; mon=`parseDayMon "$m2"`; m2=`nextDate "$m2"`
-    day=`echo "$m2" | grep -o "^[0-9]\{1,2\}$m3$m3" | sed -e "s/[^0-9]\+$//"`
+    date=`echo "$1" | sed -e "s/$match//g"`
+    year=`parseYear "$m1"`; m1=`nextDate "$m1"`
+    mon=`parseDayMon "$m1"`; m1=`nextDate "$m1"`
+    # also match: 2000.01.01-03, 2000.01.01,03
+    day=`echo "$m1" | grep -o "^[0-9]\{1,2\}$m0$m0" | sed -e "s/[^0-9]\+$//"`
+    echo -e "$date\n$year\n$mon\n$day"; exit 1
   fi
 
   # match: 01.01.2000 1/1/2000 1-01-2000
   if [ "$m1" = "" ]; then
-    match="^[0-9]\{1,2\}[/.-]\{1\}[0-9]\{1,2\}[/.-]\{1\}[0-9]\{4\}"
+    match="$2[0-9]\{1,2\}[/.-]\{1\}[0-9]\{1,2\}[/.-]\{1\}[0-9]\{4\}$3"
     m1=`echo "$1" | grep -o "$match"`
     if [ "$m1" != "" ]; then
-      mon=`parseDayMon "$m1"`; m2=`nextDate "$m1"`
-      day=`parseDayMon "$m2"`; m2=`nextDate "$m2"`
-      year=`parseYear "$m2"`
+      date=`echo "$1" | sed -e "s/$match//g"`
+      mon=`parseDayMon "$m1"`; m1=`nextDate "$m1"`
+      day=`parseDayMon "$m1"`; m1=`nextDate "$m1"`
+      year=`parseYear "$m1"`
+      echo -e "$date\n$year\n$mon\n$day"; exit 1
+    fi
+  fi
+}
+
+#-----------------------------------------------------------------------#
+# if date matched, can update folder/tags
+# $1 = album tag
+# $2 = path w/artist
+# $3 = just parent directory of path
+
+matchDateInAlbum () {
+  # match with parent path
+  m1=`matchDate "$3" "^"`
+  if [ "$m1" != "" ]; then
+    IFS=$'\n'; dates=($m1); unset IFS
+    alb="${dates[0]}"
+  fi
+
+  # match with album tag
+  if [ "$m1" = "" ]; then
+    m1=`matchDate "$1" "^"`
+    if [ "$m1" != "" ]; then
+      IFS=$'\n'; dates=($m1); unset IFS
+      alb="${dates[0]}"
     fi
   fi
 
-  # match: studio album - starts with YEAR then space in tag
+  # match with full path
+  if [ "$m1" = "" ]; then
+    m1=`matchDate "$2" "/"`
+    if [ "$m1" != "" ]; then
+      IFS=$'\n'; dates=($m1); unset IFS
+      alb=`echo "${dates[0]}" | sed -e 's/^\///' -e 's/\/.*$//'`
+    fi
+  fi
+
+  # match: studio album: starts with YEAR then space (only match in tag)
   if [ "$m1" = "" ]; then
     m1=`echo "$1" | grep -o "^[0-9]\{4\}\s\+"`
     if [ "$m1" != "" ]; then
-      year=`echo "$m1" | sed -e 's/\s\+//g'`
+      dates[0]=`echo "$m1" | sed -e 's/\s\+//g'`
     fi
   fi
 
   # return if did not match anything
   if [ "$m1" = "" ]; then echo ""; exit 1; fi
-
-  # remove date match from beginning album name
-  alb=`echo "$1" | sed -r "s/^.{${#m1}}//"`
 
   # remove junk from beginning & end
   alb=`echo "$alb" | sed -e "s/^[^A-Za-z]\+//" -e "s/[^A-Za-z0-9\)]\+$//"`
@@ -144,16 +180,19 @@ matchDateInAlbum () {
   # replace ', Ny' with ', NY'
   alb=`echo "$alb" | sed -e 's/, .\{2\}\s/\U&/g' -e 's/, .\{2\}$/\U&/g'`
 
-  # check that file extension is at end if FLAC
-
+  # remove file extension from end
+  alb=`echo "$alb" | sed -e 's/\(mp3\|flac\|m4a\|mp4\|shn\|wav\)$//i' \
+  -e 's/[^A-Za-z0-9\)]\+$//'`
+  
   # return in YEAR-MON-DAY format
-  echo "$year.$mon.$day $alb"
+  echo "${dates[1]}.${dates[2]}.${dates[3]} $alb"
 }
 
 #-----------------------------------------------------------------------#
 # process sub-folders containing audio files
 # $1 = $artist
 # $2 = path with artist
+# $3 = current index in directories
 
 processFiles () {
   IFS=$'\n'; files=(`findAudio "$rootPath/$2"`); unset IFS
@@ -169,15 +208,16 @@ processFiles () {
     albumPath=`echo "$2" | sed -r "s/^.{${#1}}\///"`
     albumPath=`echo "$albumPath" | rev | sed -e "s/\/.\+//" | rev`
 
-    albumDate=`matchDateInAlbum "$album"`
+    # match date in tag & full path
+    albumDate=`matchDateInAlbum "$album" "$2" "$albumPath"`
     if [ "$albumDate" != "" ]; then
       if [ "$album" = "$albumDate" ]; then
         echo -e "${#files[@]} files: in album '$album' are OK!"
       else
-        echo -e "${#files[@]} files: in album '$album' move to: '$albumDate'"
+        echo -e "${#files[@]} files: in album '$album' update to: '$albumDate'"
       fi
     else
-      # file does not contain 'album' tag
+      # did not find date with tag / full path
       echo -e "move: '$2' to '$unknown'"
     fi
   fi
@@ -198,16 +238,16 @@ processIndex () {
     fi
 
     isSubDir=`echo "$p" | grep -o '.\+/.\+'`
-    if [ "$isSubDir" != "" ]; then
-      # a subdirectory of artist
-      processFiles "$artist" "$p" "$index"
-    else
+    if [ "$isSubDir" = "" ]; then
       artist=`validArtist "$p"`
       if [ "$artist" != "" ]; then
         echo -e "\nArtist: $artist"
       else
         echo "move: '$p' to: '$unknown'"
       fi
+    else
+      # subdirectory of $artist (comes after in sort order)
+      processFiles "$artist" "$p" "$index"
     fi
 
     # increment index
