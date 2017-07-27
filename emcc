@@ -289,6 +289,67 @@ matchRnSet () {
 }
 
 #-----------------------------------------------------------------------#
+# remove characters not allowed
+
+replaceNA () {
+  echo "$1" | sed -e "s/(\s*)//g" -e 's/\]//g' -e 's/\[//g' \
+  -e 's/[\*\!\:\*\$\?\/\"\;\{\}]//g' -e "s/[^A-Za-z0-9 .,-&]\+/-/g"
+}
+
+#-----------------------------------------------------------------------#
+# remove junk from beginning & end
+
+trimEnds () {
+  echo "$1" | sed -e "s/^[^A-Za-z]\+//" -e "s/[^A-Za-z0-9\)]\+$//"
+}
+
+#-----------------------------------------------------------------------#
+# after artist has been removed
+# $1 = album
+
+formatAlbum () {
+  # replace any character not allowed
+  alb=`replaceNA "$alb"`; alb=`trimEnds "$alb"`
+
+  # reset disc; replace @ before we use as disc number identifier
+  disc=""; alb=`echo "$1" | sed -e 's/\@//g'`
+
+  # remove I, II, III, IV, V from beginning
+  rn=`matchRnSet "$alb"`
+  if [ "$rn" != "" ]; then disc=" @$rn"; alb=`matchRnSet "$alb" "1"`; fi
+
+  # remove CD1, disc1, disc 1, cd 1
+  dn=`matchDisc "$alb"`
+  if [ "$dn" != "" ]; then disc=" @$dn"; alb=`matchDisc "$alb" "1"`; fi
+
+  # replace ', Ny' with ', NY'
+  alb=`capitalizeStateCode "$alb"`
+
+  # replace duplicate - & duplicate spaces
+  alb=`echo "$alb" | sed -e "s/-\s*-/-/g" -e "s/-\+/-/g" -e "s/\s\+/ /g"`
+
+  # if ends in space then a single digit, digit is probably discnumber
+  dn2=`echo "$alb" | grep -o "\s\+[0-9]$" | grep -o "[0-9]$"`
+  if [ "$dn2" != "" ]; then
+    disc=" @$dn2"
+    alb=`echo "$alb" | sed -e "s/\s\+[0-9]$//"`
+  fi
+
+  # remove bitrate from end
+  alb=`echo "$alb" | sed -e 's/\s\+\(128\|192\|256\|320\)$//'`
+  alb=`trimEnds "$alb"`
+
+  # remove file extension from end
+  alb=`echo "$alb" | sed -e 's/\(mp3\|flac\|m4a\|mp4\|shn\|wav\)$//i'`
+  alb=`trimEnds "$alb"`
+
+  # remove SBD from end
+  alb=`echo "$alb" | sed -e 's/sbd$//i'`; alb=`trimEnds "$alb"`
+  
+  echo "$alb$disc"
+}
+
+#-----------------------------------------------------------------------#
 # if date matched, can update folder/tags
 # $1 = artist
 # $2 = album tag
@@ -311,72 +372,34 @@ matchDateInAlbum () {
   # split info from $m1 data
   if [ "$m1" != "" ]; then
     IFS=$'\n'; dates=($m1); unset IFS
+
     alb=`albumFromPath "${dates[0]}"`
-  fi
 
-  # return if did not match anything
-  if [ "$m1" = "" ]; then echo ""; exit 1; fi
+    # replace any character not allowed
+    alb=`replaceNA "$alb"`; alb=`trimEnds "$alb"`
 
-  # replace any character not allowed with -
-  alb=`echo "$alb" | sed -e "s/(\s*)//g" -e 's/\]//g' -e 's/\[//g' \
-  -e 's/[\*\!\:\*\$\?\/\"\;\{\}]//g' -e "s/[^A-Za-z0-9 .,-&]\+/-/g"`
+    # replace ^$artist from within $alb
+    alb=`echo "$alb" | sed -e "s/^$1//ig"`; alb=`trimEnds "$alb"`
 
-  # remove junk from beginning & end
-  alb=`echo "$alb" | sed -e "s/^[^A-Za-z]\+//" -e "s/[^A-Za-z0-9\)]\+$//"`
-
-  # replace ^$artist from within $alb
-  alb=`echo "$alb" | sed -e "s/^$1//ig" -e "s/^[^A-Za-z]\+//"`
-
-  # if $alb is blank, look to album tag, split before first -
-  if [ "$alb" = "" ]; then
-    if [ "$(echo $2 | grep -o '.\+ -')" != "" ]; then
-      alb=`echo "$2" | grep -o ".\+ -" | sed -e "s/ -$//"`
-    else
-      alb="$2"
+    # if $alb is blank, look to album tag, split before first -
+    if [ "$alb" = "" ]; then
+      if [ "$(echo $2 | grep -o '.\+ -')" != "" ]; then
+        alb=`echo "$2" | grep -o ".\+ -" | sed -e "s/ -$//"`
+      else
+        alb="$2"
+      fi
     fi
-  fi
 
-  # replace @ before we use as disc number identifier
-  alb=`echo "$alb" | sed -e 's/\@/ /g'`
-  disc="" # reset disc
+    # format the album
+    alb=`formatAlbum "$alb"`
 
-  # remove I, II, III, IV, V from beginning
-  rn=`matchRnSet "$alb"`
-  if [ "$rn" != "" ]; then disc=" @$rn"; alb=`matchRnSet "$alb" "1"`; fi
-
-  # remove CD1, disc1, disc 1, cd 1
-  dn=`matchDisc "$alb"`
-  if [ "$dn" != "" ]; then disc=" @$dn"; alb=`matchDisc "$alb" "1"`; fi
-
-  # if ends in space then a single digit, digit is probably discnumber
-  dn2=`echo "$alb" | grep -o "\s\+[0-9]$" | grep -o "[0-9]$"`
-  if [ "$dn2" != "" ]; then
-    disc=" @$dn2"
-    alb=`echo "$alb" | sed -e "s/\s\+[0-9]$//"`
-  fi
-
-  # replace duplicate - & duplicate spaces
-  alb=`echo "$alb" | sed -e "s/-\s*-/-/g" -e "s/-\+/-/g" -e "s/\s\+/ /g"`
-
-  # replace ', Ny' with ', NY'
-  alb=`capitalizeStateCode "$alb"`
-
-  # remove bitrate from end
-  alb=`echo "$alb" | sed -e 's/\s\+\(128\|192\|256\|320\)$//'`
-
-  # remove file extension from end
-  alb=`echo "$alb" | sed -e 's/\(mp3\|flac\|m4a\|mp4\|shn\|wav\)$//i' \
-  -e 's/[^A-Za-z0-9\)]\+$//'`
-
-  # remove SBD from end
-  alb=`echo "$alb" | sed -e 's/sbd$//i' -e "s/[^A-Za-z0-9\)]\+$//"`
-  
-  if [ "${dates[2]}" = "" ]; then
-    # only have YEAR
-    echo "${dates[1]} $alb$disc"
-  else
-    # return in YEAR-MON-DAY format
-    echo "${dates[1]}.${dates[2]}.${dates[3]} $alb$disc"
+    if [ "${dates[2]}" = "" ]; then
+      # only have YEAR
+      echo "${dates[1]} $alb"
+    else
+      # return in YEAR-MON-DAY format
+      echo "${dates[1]}.${dates[2]}.${dates[3]} $alb"
+    fi
   fi
 }
 
