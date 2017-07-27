@@ -89,13 +89,13 @@ findAudio () {
 
 id3Get () {
   ffprobe -loglevel error -show_entries format_tags="$1" \
-  -of default=noprint_wrappers=1:nokey=1 "$2"
+  -of default=noprint_wrappers=1:nokey=1 "$2" 2>&1
 }
 
 #-----------------------------------------------------------------------#
 
 getBitrate () {
-  ffprobe -v error -show_entries format=bit_rate "$1" | \
+  ffprobe -v error -show_entries format=bit_rate "$1" 2>&1 | \
   grep -o "bit_rate=[0-9]\+" | sed -e "s/bit_rate=//"
 }
 
@@ -136,6 +136,7 @@ matchDate () {
     year=`echo "$m1" | grep -o "^[0-9]\{4\}"`; m1=`nextDate "$m1"`
     mon=`parseDayMon "$m1"`; m1=`nextDate "$m1"`
     day=`echo "$m1" | grep -o "^[0-9]\{1,2\}$m0$m0" | sed -e "s/[^0-9]\+$//"`
+    if [ "${#day}" -eq "1" ]; then day="0$day"; fi
   fi
 
   # match: 01.01.2000 1/1/2000 1-01-2000
@@ -205,25 +206,61 @@ capitalizeStateCode () {
 # $4 = just parent directory of path
 
 matchDateInAlbum () {
-  # match with parent path
+  # match: live album: with parent path
   m1=`matchDate "$4" "^"`
 
-  # match with album tag
+  # match: live album: with album tag
   if [ "$m1" = "" ]; then m1=`matchDate "$2"`; fi
 
-  # match with full path
+  # match: live album: with full path
   if [ "$m1" = "" ]; then m1=`matchDate "$1/$3"`; fi
 
   if [ "$m1" != "" ]; then
     IFS=$'\n'; dates=($m1); unset IFS
-    alb=`echo "${dates[0]}" | sed -e 's/^\///' -e 's/\/.*$//'`
+    
+    # album is a full path
+    mPath=`echo "${dates[0]}" | grep -o "\/"`
+    if [ "$mPath" != "" ]; then
+      # avoid returning only (CD1 or Disc1) if that is parent directory
+      last=`echo "${dates[0]}" | rev | sed -e 's/\/.*$//' | rev`
+      if [ "${#last}" -lt "10" ]; then
+        mPath=`echo "${dates[0]}" | sed -e "s/\/$last$//"`
+        last2=`echo "$mPath" | rev | sed -e 's/\/.*$//' | rev | \
+        sed -e 's/^[0-9]\+\s\+//'`
+
+        alb="$last2 $last"
+      else
+        alb="$last"
+      fi
+    else
+      # default to what was matched in `matchDate`
+      alb="${dates[0]}"
+    fi
   fi
 
-  # match: studio album: starts with YEAR then space (only match in tag)
+  # match: studio album: starts with YEAR then space
   if [ "$m1" = "" ]; then
+    dates=('')
+    # try album tag
     m1=`echo "$2" | grep -o "^[0-9]\{4\}\s\+"`
+    # try folder name
+    if [ "$m1" = "" ]; then
+      m2="$4"; m1=`echo "$4" | grep -o "^[0-9]\{4\}\s\+"`
+    else
+      m2="$2"
+    fi
+
     if [ "$m1" != "" ]; then
-      dates[0]=`echo "$m1" | sed -e 's/\s\+//g'`
+      # remainder becomes album name
+      alb=`echo "$m2" | sed -e 's/^[0-9]\+\s\+//g'`
+
+      # to avoid too many mistaken matches from folder name:
+      # folder name & album tag have to be somewhat similar
+      if [[ $4 == *"$2"* ]]; then
+        dates[1]=`echo "$m1" | grep -o "[0-9]\+"`
+      else
+        m1=""
+      fi
     fi
   fi
 
@@ -245,44 +282,79 @@ matchDateInAlbum () {
     fi
   fi
 
-  # remove I, II, III, IV, V from beginning
-  alb=`echo "$alb" | sed -e "s/^I*[IV]\+ //" -e "s/^[^A-Za-z]\+//"`
+  disc="" # reset disc
 
-  # remove CD1, disc1, disc 1, cd 1 from end
-  alb=`echo "$alb" | sed -e "s/[cC][dD]\s*[0-9]*//" \
-  -e "s/[dD][iI][sS][cC]\s*[0-9]*//" -e "s/[^A-Za-z0-9\)]\+$//"`
+  # replace @ before we use as disc number identifier
+  alb=`echo "$alb" | sed -e 's/\@/ /g'`
+
+  # remove I, II, III, IV, V from beginning
+  # have to parse discnumber as file sort order is reversed
+  rn=`echo "$alb" | grep -o "^I*[IV]\+ " | sed -e "s/\s\+$//"`
+  if [ "$rn" != "" ]; then
+    alb=`echo "$alb" | sed -e "s/^I*[IV]\+ //" -e "s/^[^A-Za-z]\+//"`
+    case "$rn" in
+    "I") disc=" @1" ;;
+    "II") disc=" @2" ;;
+    "III") disc=" @3" ;;
+    "IV") disc=" @4" ;;
+    "V") disc=" @5"
+    esac
+  fi
+
+  # remove CD1, disc1, disc 1, cd 1
+  dn=`echo "$alb" | sed -e "s/\s\+//g" | grep -io "\(cd\|disc\)[0-9]\+" | \
+  grep -o "[0-9]\+$"`
+  if [ "$dn" != "" ]; then
+    disc=" @$dn"
+    alb=`echo "$alb" | sed -e "s/[cC][dD]\s*[0-9]*//" \
+    -e "s/[dD][iI][sS][cC]\s*[0-9]*//" -e "s/[^A-Za-z0-9\)]\+$//"`
+  fi
+
+  # if ends in space then a single digit, digit is probably discnumber
+  dn2=`echo "$alb" | grep -o "\s\+[0-9]$" | grep -o "[0-9]$"`
+  if [ "$dn2" != "" ]; then
+    disc=" @$dn2"
+    alb=`echo "$alb" | sed -e "s/\s\+[0-9]$//"`
+  fi
 
   # replace any character not allowed with -
-  alb=`echo "$alb" | sed -e "s/()//g" -e "s/\*//g" \
-  -e "s/[^A-Za-z0-9 .,-&]\+/-/g"`
-
+  alb=`echo "$alb" | sed -e "s/(\s*)//g" -e 's/\]//g' -e 's/\[//g' \
+  -e 's/[\*\!\:\*\$\?\/\"\;\{\}]//g' -e "s/[^A-Za-z0-9 .,-&]\+/-/g"`
+  
   # replace duplicate - & duplicate spaces
-  alb=`echo "$alb" | sed -e "s/-\+/-/g" -e "s/\s\+/ /g"`
+  alb=`echo "$alb" | sed -e "s/-\s\+-/-/g" -e "s/-\+/-/g" -e "s/\s\+/ /g"`
+
+  echo "'$alb'" >/tmp/fucker
 
   # replace ', Ny' with ', NY'
   alb=`capitalizeStateCode "$alb"`
 
+  # remove bitrate from end
+  alb=`echo "$alb" | sed -e 's/\s\+\(128\|192\|256\|320\)$//'`
+
   # remove file extension from end
   alb=`echo "$alb" | sed -e 's/\(mp3\|flac\|m4a\|mp4\|shn\|wav\)$//i' \
   -e 's/[^A-Za-z0-9\)]\+$//'`
+
+  # remove SBD from end
+  alb=`echo "$alb" | sed -e 's/sbd$//i' -e "s/[^A-Za-z0-9\)]\+$//"`
   
-  # return in YEAR-MON-DAY format
-  echo "${dates[1]}.${dates[2]}.${dates[3]} $alb"
-}
-
-#-----------------------------------------------------------------------#
-# move path structure into NEEDS_WORK path
-
-moveToUnknown() {
-  echo -e "move: '$1' to: '$unknown'\n"
+  if [ "${dates[2]}" = "" ]; then
+    echo "${dates[1]} $alb$disc"
+  else
+    # return in YEAR-MON-DAY format
+    echo "${dates[1]}.${dates[2]}.${dates[3]} $alb$disc"
+  fi
 }
 
 #-----------------------------------------------------------------------#
 # $1 = path
 # $2 = artist
 # $3 = album
+# $4 = discnumber
 
 updateTags () {
+  if [ "$4" != "" ]; then echo "discnumber: $4"; fi
   echo "album tag: update to: '$3'"
 }
 
@@ -293,6 +365,13 @@ updateTags () {
 
 updatePath () {
   echo "path: update to: '$matchAlbum'"
+}
+
+#-----------------------------------------------------------------------#
+# move path structure into NEEDS_WORK path
+
+moveToUnknown() {
+  echo -e "move: '$1' to: '$unknown'\n"
 }
 
 #-----------------------------------------------------------------------#
@@ -319,20 +398,30 @@ processDirectory () {
     if [ "$matchAlbum" != "" ]; then
       echo "${#files[@]} files: in '$2'"
 
+      # pull disc number (if found)
+      disc=`echo "$matchAlbum" | grep -o " \@[0-9]\+$" | sed -e "s/ \@//"`
+      if [ "$disc" != "" ]; then
+        matchAlbum=`echo "$matchAlbum" | sed -e "s/\s\+\@[0-9]\+$//"`
+      fi
+
       # check album tag
       if [ "$albumTag" = "$matchAlbum" ]; then
         echo "album tag: OK"
       else
-        updateTags "$2" "$1" "$matchAlbum"
+        updateTags "$2" "$1" "$matchAlbum" "$disc"
       fi
 
       # add audio file .ext to path if bitrate >320
       bitrate=`getBitrate "${files[0]}"`
-      if [ "$bitrate" -gt "375000" ]; then
-        # must be flac or better; include in album
-        ext=`echo "${files[0]}" | grep -o "\.[A-Za-z0-9]\+$" | \
-        sed -e "s/^\.//" -e "s/./\U&/ig"`
-        matchAlbum="$matchAlbum - $ext"
+      if [ "$bitrate" = "" ]; then
+        echo "Error: invalid/missing files"
+      else
+        if [ "$bitrate" -gt "400000" ]; then
+          # must be flac or better; include in album
+          ext=`echo "${files[0]}" | grep -o "\.[A-Za-z0-9]\+$" | \
+          sed -e "s/^\.//" -e "s/./\U&/ig"`
+          matchAlbum="$matchAlbum - $ext"
+        fi
       fi
 
       # check folder name
