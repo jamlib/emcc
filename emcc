@@ -386,7 +386,7 @@ updateTags () {
   coverArt=`handleArtwork "$rootPath/$2/$1" "${files[0]}"`
   if [ "$coverArt" != "" ]; then echo "Art: '$coverArt'"; fi
 
-  i="0"
+  i="0"; prevDisc=""
   for f in "${files[@]}"; do
     i=$((i+1))
 
@@ -398,49 +398,28 @@ updateTags () {
     if [ "$artistTag" = "" ]; then
       artistTag="$2"
     else
+      # replace 'The' if matches similarily
       cA=`echo "$2" | sed -e "s/^the //i" -e "s/, the$//i"`
       if [[ $artistTag == *"$cA"* ]]; then
         artistTag="$cA"
       fi
     fi
 
-    titleTag=`id3Get "title" "$f"`
-    if [ "$titleTag" = "" ]; then
-      # tags from filename
-      fN=`echo "$f" | rev | sed -e "s/\/.\+//" | rev | sed -e "s/\..\+$//"`
+    # get filename by looking at path ( removing file extension )
+    fN=`echo "$f" | rev | sed -e "s/\/.\+//" | rev`
 
-      # match: start with digit then non digit
-      if [ "$(echo $fN | grep -io '^[0-9]\+[^0-9a-z]')" != "" ]; then
-        titleTag=`echo "$fN" | sed -e "s/^[0-9]\+[^0-9a-z]//"`
-      fi
-
-      # match: nugs.net pattern
-      if [ "$titleTag" = "" ]; then
-        fM=`echo $fN | grep -io '^[a-z0-9]\+d[0-9]\{1\}[^0-9]\{1\}'`
-        if [ "$fM" != "" ]; then
-          fN=`echo $fN | sed -e 's/^[a-z0-9]\+d[0-9]\{1\}[^0-9]\{1\}//i'`
-          titleTag=`echo "$fN" | sed -e "s/^[0-9]\+[^0-9a-z]//"`
-        fi
-      fi
-
-      if [ "$titleTag" != "" ]; then
-        # replace non-known characts with space, then trim
-        titleTag=`echo "$titleTag" | sed -e "s/[_-]/ /g"`
-        titleTag=`trimEnds "$titleTag"`
-      fi
-    fi
-
-    trackTag=`id3Get "track" "$f"`
-    if [ "$trackTag" = "" ]; then trackTag="$i"; fi
-    if [ "$trackTag" != "" ]; then
-      trackTag=`echo "$trackTag" | grep -o "^[0-9]\+" | \
-      sed 's/^0*//' | xargs printf %02d`
-    fi
-
-    # remove trackTag from start of title
-    titleTag=`echo "$titleTag" | sed -e "s/^$trackTag[^a-z0-9]\+//i"`
-
+    # 1) start with disc number
     discTag=`id3Get "disc" "$f" | grep -o "^[0-9]\+"`
+
+    # nugs.net pattern
+    if [ "$(echo $fN | grep -io '^[a-z]\+[0-9]\+d[0-9]\+[-_ ]')" != "" ]; then
+      fN=`echo "$fN" | sed -e "s/^[a-z]\+[0-9]\+d//i"`
+      if [ "$discTag" = "" ]; then
+        discTag=`echo "$fN" | grep -o "^[0-9]\+"`
+      fi
+      fN=`echo "$fN" | sed -e "s/^[0-9]\+[-_ ]//"`
+    fi
+
     if [ "$discTag" = "" ]; then
       # try from album tag
       aTag=`id3Get "album" "$f"`
@@ -452,6 +431,41 @@ updateTags () {
         m2=`formatAlbum "$1"`
         discTag=`matchDiscInternal "$m2"`
       fi
+
+      if [ "$discTag" = "" ] && [ "$prevDisc" != "" ]; then
+        discTag="$prevDisc"
+      fi
+    fi
+
+    # save in case next file has no disc tag
+    if [ "$discTag" != "" ]; then prevDisc="$discTag"; fi
+
+    # 2) track number
+    trackTag=`id3Get "track" "$f" | grep -o "^[0-9]\+"`
+    fileTrack=`echo "$fN" | grep -o "^[0-9]\+"`
+    if [ "$fileTrack" != "" ]; then
+      # take higher of track or filetrack tag
+      if [ "$trackTag" = "" ]; then
+        trackTag="$fileTrack"
+      elif [ "$fileTrack" -gt "$trackTag" ]; then
+        trackTag="$fileTrack"
+      fi
+    fi
+
+    # default to index+1
+    if [ "$trackTag" = "" ]; then trackTag="$i"; fi
+
+    # remove track from filename
+    fN=`echo "$fN" | sed -e "s/^[0-9]\+[-_ ]*//" | sed -e "s/\..\+$//"`
+
+    # 3) title
+    titleTag=`id3Get "title" "$f"`
+    if [ "$titleTag" = "" ]; then titleTag="$fN"; fi
+
+    if [ "$titleTag" != "" ]; then
+      # replace non-known characts with space, then trim
+      titleTag=`echo "$titleTag" | sed -e "s/[_-]/ /g"`
+      titleTag=`trimEnds "$titleTag"`
     fi
 
     if [ "$writeMode" = "1" ]; then
@@ -470,6 +484,8 @@ updateTags () {
 writeAudio () {
   parentPath=`echo "$1" | grep -o ".*\/"`
 
+  fmtTrack=`echo "$5" | sed 's/^0*//' | xargs printf %02d`
+
   fileName="$parentpath"
   if [ "$6" != "" ]; then fileName="$fileName$6-"; fi
 
@@ -482,7 +498,7 @@ writeAudio () {
     # artwork
     ffmpeg -i "$1" -i "$7" -map 0:a -c:a copy \
     -metadata artist="$2" -metadata album_artist="$2" -metadata album="$3" \
-    -metadata title="$4" -metadata track="$5" -metadata disc="$6" \
+    -metadata title="$4" -metadata track="$fmtTrack" -metadata disc="$6" \
     -map 1:v -c:v copy -metadata:s:v title="Album cover" -metadata:s:v comment="Cover (Front)" \
     -id3v2_version 4 "/tmp/$fileName" 2> /dev/null
   else
@@ -746,7 +762,7 @@ processDirectory () {
 # move path structure into $unknown direcotry
 
 handleUnknown() {
-  echo -e "\nmove: '$1' to: '$unknown'"
+  echo -e "\nunknown: '$1'"
 }
 
 #-----------------------------------------------------------------------#
