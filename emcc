@@ -62,6 +62,11 @@ checkPreReq () {
     valid="false"
   fi
 
+  if [ "$(type 'convert' 2> /dev/null)" = "" ]; then
+    echo -e "\nError: 'convert' not found, please install 'imagemagick'!"
+    valid="false"
+  fi
+
   if [ "$valid" != "true" ]; then
     echo -e "Exiting.\n"
     kill -s TERM $TOP_PID
@@ -74,6 +79,14 @@ checkPreReq () {
 validArtist () {
   match=`echo "$1" | grep -o "[^A-Za-z0-9,' &]\+"`
   if [ "$match" = "" ]; then echo "$1"; fi
+}
+
+#-----------------------------------------------------------------------#
+# images files recursively within folder
+
+findImages () {
+  find "$1" -type f -regextype posix-egrep \
+  -iregex ".+\.(jpg|jpeg|png)$" | sort
 }
 
 #-----------------------------------------------------------------------#
@@ -95,8 +108,14 @@ id3Get () {
 #-----------------------------------------------------------------------#
 
 getBitrate () {
-  ffprobe -v error -show_entries format=bit_rate "$1" 2>&1 | \
-  grep -o "bit_rate=[0-9]\+" | sed -e "s/bit_rate=//"
+  bitrate=`ffprobe -v error -show_entries format=bit_rate "$1" 2>&1 | \
+  grep -o "bit_rate=[0-9]\+" | sed -e "s/bit_rate=//"`
+
+  if [ "$bitrate" = "" ]; then
+    echo "0"
+  else
+    echo "$bitrate"
+  fi
 }
 
 #-----------------------------------------------------------------------#
@@ -258,11 +277,19 @@ matchStudioAlbum () {
 
 matchDisc () {
   if [ "$2" = "" -o "$2" = "0" ]; then
-    echo "$1 : $2" >/tmp/emcc
     echo $1 | grep -io "\s\+\(cd\|disc\)\s*[0-9]\+" | grep -o "[0-9]\+$"
   elif [ "$2" = "1" ]; then
     echo $1 | sed -e "s/\s\+\(cd\|disc\)\s*[0-9]\+//i" \
     -e "s/[^A-Za-z0-9\)]\+$//"
+  fi
+}
+
+# uses ' @i' at the very end of the album tag
+matchDiscInternal () {
+  if [ "$2" = "" -o "$2" = "0" ]; then
+    echo "$1" | grep -o "\s*\@[0-9]\+$" | sed -e "s/\s*\@//"
+  elif [ "$2" = "1" ]; then
+    echo "$1" | sed -e "s/\s*\@[0-9]\+$//"
   fi
 }
 
@@ -404,14 +431,98 @@ matchDateInAlbum () {
 }
 
 #-----------------------------------------------------------------------#
+# conver & return smallest
+
+convertArt () {
+  imgPath=`echo "$1" | grep -o ".*\/"`
+
+  if [ -f "$imgPath/emcc-c.jpg" ]; then rm "$imgPath/emcc-c.jpg"; fi
+
+  # optimize folder.jpg to 500px @ 90% quality
+  convert "$1" -resize 500 -quality 90 "$imgPath/emcc-c.jpg"
+
+  # if converted file size is smaller
+  if [ $(stat -c%s "$imgPath/emcc-c.jpg") -lt $(stat -c%s "$1") ]; then
+    echo "$imgPath/emcc-c.jpg"
+  else
+    rm "$imgPath/emcc-c.jpg"
+    echo "$1"
+  fi
+}
+
+#-----------------------------------------------------------------------#
+# $1 = dir path, $2 = first audio file
+
+handleArtwork () {
+  coverArt=""
+
+  # try: find embedded cover art
+  ffmpeg -y -i "$2" "$1/emcc.jpg" 2> /dev/null
+
+  if [ -e "$1/emcc.jpg" ]; then
+    coverArt=`convertArt "$1/emcc.jpg"`
+    if [ "$coverArt" != "$1/emcc.jpg" ]; then
+      rm "$1/emcc.jpg"; mv "$coverArt" "$1/emcc.jpg"
+    fi
+  fi
+
+  if [ "$coverArt" = "" ]; then
+    # find recursive image files
+    IFS=$'\n'; images=(`findImages "$1"`); unset IFS
+
+    # try: find recursive cover art
+    # named: folder, cover, image
+    for i in "${images[@]}"; do
+      imgName=`echo "$i" | rev | sed -e 's/\/.*$//' | rev`
+      imgMatch=`echo "$imgName" | grep -io '\(folder\|cover\|image\)'`
+      if [ "$imgMatch" != "" ]; then coverArt="$i"; break; fi
+    done
+
+    if [ "$coverArt" = "" ]; then
+      # try: convert image with largest file size
+      largestImg="0"
+      for i in "${images[@]}"; do
+        imgSize=`stat -c%s "$i"`
+        if [ "$imgSize" -gt "$largestImg" ]; then
+          coverArt="$i"; largestImg="$imgSize"
+        fi
+      done
+    fi
+
+    if [ "$coverArt" != "" ]; then
+      coverArt=`convertArt "$coverArt"`
+    fi
+  fi
+
+  if [ "$coverArt" != "" ]; then echo "$coverArt"; fi
+}
+
+#-----------------------------------------------------------------------#
 # $1 = path
 # $2 = artist
 # $3 = album
-# $4 = discnumber
+# $4 = discnumber (override with tag)
 
 updateTags () {
-  if [ "$4" != "" ]; then echo "discnumber: $4"; fi
   echo "album tag: update to: '$3'"
+
+  if [ "$writeMode" != "0" ]; then
+
+    IFS=$'\n'; files=(`findAudio "$rootPath/$2/$1"`); unset IFS
+
+    coverArt=`handleArtwork "$rootPath/$2/$1" "${files[0]}"`
+    echo "Art: $coverArt"
+
+    for f in "${files[@]}"; do
+      # get tags
+      artistTag=`id3Get "artist" "$f"`
+      titleTag=`id3Get "title" "$f"`
+      trackTag=`id3Get "track" "$f"`
+      discTag=`id3Get "disc" "$f"`
+
+      echo "$discTag $trackTag $titleTag - $3 - $artistTag"
+    done
+  fi
 }
 
 #-----------------------------------------------------------------------#
@@ -421,6 +532,9 @@ updateTags () {
 
 updatePath () {
   echo "path: update to: '$matchAlbum'"
+  # TODO: check if desired folder already exists
+  # if so: handle duplicates
+  # move files into path
 }
 
 #-----------------------------------------------------------------------#
@@ -439,15 +553,13 @@ moveToUnknown() {
 processDirectory () {
   IFS=$'\n'; files=(`findAudio "$rootPath/$1/$2"`); unset IFS
   if [ "${#files[@]}" -gt "0" ]; then
+    dirName=`echo "$2" | rev | sed -e "s/\/.\+//" | rev`
 
-    # try: get embedded album tag from first audio file
+    # get embedded album tag from first audio file
     for f in "${files[@]}"; do
       albumTag=`id3Get "album" "$f"`
       break
     done
-
-    # last directory name
-    dirName=`echo "$2" | rev | sed -e "s/\/.\+//" | rev`
 
     # match date in tag & full path
     matchAlbum=`matchDateInAlbum "$1" "$albumTag" "$2" "$dirName"`
@@ -455,9 +567,9 @@ processDirectory () {
       echo "${#files[@]} files: in '$2'"
 
       # pull disc number (if found)
-      disc=`echo "$matchAlbum" | grep -o " \@[0-9]\+$" | sed -e "s/ \@//"`
+      disc=`matchDiscInternal "$matchAlbum"`
       if [ "$disc" != "" ]; then
-        matchAlbum=`echo "$matchAlbum" | sed -e "s/\s\+\@[0-9]\+$//"`
+        matchAlbum=`matchDiscInternal "$matchAlbum" "1"`
       fi
 
       # check album tag
@@ -469,14 +581,10 @@ processDirectory () {
 
       # add audio file .ext to path if bitrate >320
       bitrate=`getBitrate "${files[0]}"`
-      if [ "$bitrate" = "" ]; then
-        echo "Error: invalid/missing files"
-      else
-        if [ "$bitrate" -gt "400000" ]; then
-          # must be flac or better; include in album
-          ext=`getFileExt "${files[0]}"`
-          matchAlbum="$matchAlbum - $ext"
-        fi
+      if [ "$bitrate" -gt "400000" ]; then
+        # must be flac or better; include ext in folder path
+        ext=`getFileExt "${files[0]}"`
+        matchAlbum="$matchAlbum - $ext"
       fi
 
       # check folder name
@@ -534,8 +642,8 @@ processIndex () {
 #-----------------------------------------------------------------------#
 # main
 
-if [ $# -ne 1 ]; then
-  echo -e "\nUsage: emcc [path]\n"; exit 1
+if [ $# -gte 1 ]; then
+  echo -e "\nUsage: emcc [path] [mode]\n"; exit 1
 fi
 
 if [ ! -d "$1" ]; then
@@ -543,6 +651,10 @@ if [ ! -d "$1" ]; then
 fi
 
 rootPath="$1"
+
+# set mode
+writeMode="$2"
+if [ "$writeMode" = "" ]; then writeMode="0"; fi
 
 # move folders here that dont match the known pattern
 unknown="000 NEEDS WORK"
