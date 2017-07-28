@@ -230,7 +230,7 @@ formatAlbum () {
   alb=`replaceNA "$alb"`; alb=`trimEnds "$alb"`
 
   # reset disc; replace @ before we use as disc number identifier
-  disc=""; alb=`echo "$1" | sed -e 's/\@//g'`
+  disc=""; alb=`echo "$1" | sed -e 's/\@//g' -e 's/([0-9]\+)//g'`
 
   # remove I, II, III, IV, V from beginning
   rn=`matchRnSet "$alb"`
@@ -389,6 +389,9 @@ updateTags () {
   i="0"
   for f in "${files[@]}"; do
     i=$((i+1))
+
+    bitrate=`getBitrate "$f"`
+    if [ "$bitrate" -eq "0" ]; then continue; fi
 
     # get embedded tags
     artistTag=`id3Get "artist" "$f"`
@@ -706,39 +709,35 @@ processDirectory () {
 
     matchAlbum=`matchDateInAlbum "$1" "$2" "$dirName" "$albumTag"`
     if [ "$matchAlbum" != "" ]; then
-      # if folder already exists (partial match) then delete
-      checkDup=`checkDuplicate "$matchAlbum" "$1" "$2"`
 
-      if [ "$checkDup" != "" ]; then
-        # since perfect path exists before process, we know to keep that
-        echo -e "\nDuplicate: deleting '$2'"
-        #if [ "$writeMode" = "1" ]; then rm -r "$rootPath/$1/$2"; fi
-      else
-        echo -e "\n${#files[@]} files: in '$2'"
+      # TODO: not sure how to handle duplicates
+      #checkDup=`checkDuplicate "$matchAlbum" "$1" "$2"`
 
-        # replace discnumber ie ' @1'
-        matchAlbum=`matchDiscInternal "$matchAlbum" "1"`
+      echo -e "\n${#files[@]} files: in '$2'"
 
-        # check album tag
-        if [ "$albumTag" != "$matchAlbum" ]; then
-          updateTags "$2" "$1" "$matchAlbum"
-        fi
+      # replace discnumber ie ' @1'
+      matchAlbum=`matchDiscInternal "$matchAlbum" "1"`
 
-        # add audio file .ext to path if bitrate >320
-        bitrate=`getBitrate "${files[0]}"`
-        if [ "$bitrate" -gt "400000" ]; then
-          # must be flac or better; include ext in folder path
-          ext=`getFileExt "${files[0]}"`
-          matchAlbum="$matchAlbum - $ext"
-        fi
+      # check album tag
+      if [ "$albumTag" != "$matchAlbum" ]; then
+        updateTags "$2" "$1" "$matchAlbum"
+      fi
 
-        # check folder name
-        if [ "$dirName" != "$matchAlbum" ]; then
-          updatePath "$1" "$2" "$matchAlbum"
-        fi
+      # add audio file .ext to path if bitrate >320
+      bitrate=`getBitrate "${files[0]}"`
+      if [ "$bitrate" -gt "400000" ]; then
+        # must be flac or better; include ext in folder path
+        ext=`getFileExt "${files[0]}"`
+        matchAlbum="$matchAlbum - $ext"
+      fi
+
+      # check folder name
+      mYear=`echo "$matchAlbum" | grep -o "^[0-9]\{4\}"`
+      if [ "$mYear/$matchAlbum" != "$2" ]; then
+        updatePath "$1" "$2" "$matchAlbum"
       fi
     else
-      moveToUnknown "$1/$2"
+      handleUnknown "$1/$2"
     fi
   fi
 }
@@ -746,16 +745,8 @@ processDirectory () {
 #-----------------------------------------------------------------------#
 # move path structure into $unknown direcotry
 
-moveToUnknown() {
+handleUnknown() {
   echo -e "\nmove: '$1' to: '$unknown'"
-
-  if [ "$writeMode" = "1" ]; then
-    if [ ! -d "$rootPath/$unknown" ]; then mkdir "$rootPath/$unknown"; fi
-
-    if [ -d "$rootPath/$1" ]; then 
-      mv "$rootPath/$1" "$rootPath/$unknown"
-    fi
-  fi
 }
 
 #-----------------------------------------------------------------------#
@@ -777,7 +768,7 @@ processIndex () {
       if [ "$artist" != "" ]; then
         echo -e "\nArtist: $artist"
       else
-        moveToUnknown "$p"
+        handleUnknown "$p"
       fi
     else
       # make sure directory path still exists
@@ -806,9 +797,6 @@ rootPath="$1"
 # set mode
 writeMode="$2"
 if [ "$writeMode" = "" ]; then writeMode="0"; fi
-
-# move folders here that dont match the known pattern
-unknown="000 NEEDS WORK"
 
 checkPreReq
 startupWarning
