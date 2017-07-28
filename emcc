@@ -27,7 +27,7 @@ startupWarning () {
 # remove hidden directories as they likely contain unzip fragments
 
 removeHiddenDirectories () {
-  hidden=`find "$1" -type d -regextype posix-egrep -iregex ".+/\..+$"`
+  hidden=`find "$rootPath" -type d -regextype posix-egrep -iregex ".+/\..+$"`
   if [ "$hidden" != "" ]; then
     echo -e "Hidden directories:"
     IFS=$'\n'; hiddendirs=("$hidden"); unset IFS
@@ -639,6 +639,20 @@ updatePath () {
     fi
 
     mv "$rootPath/$1/$2" "$newPath"
+
+    # remove empty parent directories
+    parentDir=`echo "$2" | grep -o ".*\/" | sed -e "s/\/$//"`
+    while [ "$parentDir" != "" ]; do
+      parentDirs=`find "$rootPath/$1/$parentDir" -type d | sort`
+      IFS=$'\n'; parentDirs=($parentDirs); unset IFS
+
+      if [ "${#parentDirs[@]}" -gt "1" ]; then
+        parentDir=""
+      else
+        rm -r "$rootPath/$1/$parentDir"
+        parentDir=`echo "$parentDir" | grep -o ".*\/" | sed -e "s/\/$//"`
+      fi
+    done
   fi
 }
 
@@ -815,7 +829,7 @@ unknown="000 NEEDS WORK"
 
 checkPreReq
 startupWarning
-#removeHiddenDirectories "$rootPath"
+if [ "$writeMode" = "1" ]; then removeHiddenDirectories; fi
 
 IFS=$'\n'; paths=(`find "$rootPath" -type d | sort`); unset IFS
 processIndex
