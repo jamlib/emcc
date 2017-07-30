@@ -412,13 +412,13 @@ updateTags () {
     discTag=`id3Get "disc" "$f" | grep -o "^[0-9]\+"`
 
     # file pattern: 's01t01', 'd01t01' OR 's01 01'
-    pm=`echo "$fN" | grep -io '^\(s\|d\)[0-9]\+\(t\|\s\)[0-9]\+'`
+    pm=`echo "$fN" | grep -io '^\(s\|d\)[0-9]\+[t_\.\s][0-9]\+'`
     if [ "$pm" != "" ]; then
       fN=`echo "$fN" | sed 's/^\(s\|d\)//'`
       if [ "$discTag" = "" ]; then
         discTag=`echo "$fN" | grep -o "^[0-9]\+"`
       fi
-      fN=`echo "$fN" | sed -e "s/^[0-9]\+\(t\|\s\)//i"`
+      fN=`echo "$fN" | sed -e "s/^[0-9]\+[t_\.\s]//i"`
       fN=`trimEnds "$fN"`
     fi
 
