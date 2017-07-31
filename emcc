@@ -47,6 +47,37 @@ removeHiddenDirectories () {
 }
 
 #-----------------------------------------------------------------------#
+
+findAndExtractArchives () {
+  archs=`find "$rootPath" -type f  -regextype posix-egrep \
+  -iregex ".+\.(zip|gz|7z|rar)$" | sort`
+
+  if [ "$archs" != "" ]; then
+    IFS=$'\n'; archArr=($archs); unset IFS
+    for arch in "${archArr[@]}"; do
+      aPPath=`echo "$arch" | grep -o ".*\/"`
+      aName=`echo "$arch" | rev | sed -e "s/\/.\+//" | rev | \
+      sed -e "s/\..\+$//"`
+
+      echo -e "Extracting: $aName..."
+
+      # find out if archive is X files (in which case create folder)
+      fileCount=`7z l "$arch" | tail -1 | grep -o "[0-9]\+ files" | \
+      grep -o "^[0-9]\+"`
+
+      if [ "$fileCount" -gt "0" ]; then
+        doExtract=`7z x -o"$aPPath$aName - -" "$arch" | tail -6`
+      else
+        doExtract=`7z x -o"$aPPath" "$arch" | tail -6`
+      fi
+
+      extractOk=`echo "$doExtract" | grep -o "Everything is Ok"`
+      if [ "$extractOk" != "" ]; then rm "$arch"; fi
+    done
+  fi
+}
+
+#-----------------------------------------------------------------------#
 # make sure required software is installed
 
 checkPreReq () {
@@ -64,6 +95,11 @@ checkPreReq () {
 
   if [ "$(type 'convert' 2> /dev/null)" = "" ]; then
     echo -e "\nError: 'convert' not found, please install 'imagemagick'!"
+    valid="false"
+  fi
+
+  if [ "$(type '7z' 2> /dev/null)" = "" ]; then
+    echo -e "\nError: please install '7z' part of 'p7zip-full'!"
     valid="false"
   fi
 
@@ -886,7 +922,10 @@ if [ "$writeMode" = "" ]; then writeMode="0"; fi
 
 checkPreReq
 startupWarning
-if [ "$writeMode" = "1" ]; then removeHiddenDirectories; fi
+if [ "$writeMode" = "1" ]; then
+  removeHiddenDirectories
+  findAndExtractArchives
+fi
 
 IFS=$'\n'; paths=(`find "$rootPath" -type d | sort`); unset IFS
 processIndex
