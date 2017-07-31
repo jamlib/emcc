@@ -308,8 +308,6 @@ formatAlbum () {
 # $3 = matchAlbum
 
 updatePath () {
-  echo -e "path: update to: '$3'"
-
   if [ "$writeMode" = "1" ]; then
     mYear=`echo "$3" | grep -o "^[0-9]\{4\}"`
     newPath="$rootPath/$1/$mYear/$3"
@@ -345,6 +343,7 @@ updatePath () {
       fi
     done
   fi
+  echo "$newPath"
 }
 
 #-----------------------------------------------------------------------#
@@ -823,12 +822,15 @@ processDirectory () {
       toConvert=""
       ext=`getFileExt "${files[0]}"`
       bitrate=`getBitrate "${files[0]}"`
-      
+
       # high bitrate must be flac/alac/wav/shn/etc
       if [ "$bitrate" -gt "420000" ]; then
         # skip if on keep list, else convert
         skipKeep=`onKeepList "$rootPath/$1/$2"`
-        if [ "$skipKeep" = "" ]; then toConvert="true"; fi
+        if [ "$skipKeep" = "" ]; then
+          echo -e "Converting: '$ext' to 'MP3'"
+          toConvert="true"
+        fi
       fi
 
       # check album tag
@@ -845,8 +847,14 @@ processDirectory () {
       mYear=`echo "$matchAlbum" | grep -o "^[0-9]\{4\}"`
       matchFolder=`echo "$2" | sed -e "s/ ([0-9]\+)$//"`
       if [ "$mYear/$matchAlbum" != "$matchFolder" ]; then
-        updatePath "$1" "$2" "$matchAlbum"
+        echo -e "path: update to: '$matchAlbum'"
+        newPath=`updatePath "$1" "$2" "$matchAlbum"`
+      else
+        newPath="$matchFolder"
       fi
+
+      # add to processed list
+      echo "$rootPath/$1/$newPath" >> "$rootPath/.emcc-processed"
     else
       echo -e "\nunknown: '$1/$2'"
     fi
@@ -873,6 +881,17 @@ onKeepList () {
 # calls: processDirectory() for each $artist sub-directory
 
 processIndex () {
+  if [ ! -f "$rootPath/.emcc-processed" ]; then
+    touch "$rootPath/.emcc-processed"
+  else
+    sort "$rootPath/.emcc-processed" > "$rootPath/.emcc-processed-new"
+    mv "$rootPath/.emcc-processed-new" "$rootPath/.emcc-processed"
+  fi
+
+  # exists in 'current', but not in 'processed'
+  newPaths=`comm -13 "$rootPath/.emcc-processed" "$rootPath/.emcc-current"`
+  IFS=$'\n'; paths=($newPaths); unset IFS
+
   for p in "${paths[@]}"; do
     # trim $rootPath from path
     p=`echo "$p" | sed -r "s/^.{${#rootPath}}\///"`
@@ -923,7 +942,10 @@ if [ "$writeMode" = "1" ]; then
   findAndExtractArchives
 fi
 
-IFS=$'\n'; paths=(`find "$rootPath" -type d | sort`); unset IFS
+paths=`find "$rootPath" -type d | sort`
+echo "$paths" > "$rootPath/.emcc-current"
+
+IFS=$'\n'; paths=("$paths"); unset IFS
 processIndex
 
 echo -e "\nemcc finished. Exiting.\n"
