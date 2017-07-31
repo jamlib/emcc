@@ -232,6 +232,12 @@ formatAlbum () {
   # reset disc; replace @ before we use as disc number identifier
   disc=""; alb=`echo "$1" | sed -e 's/\@//g' -e 's/([0-9]\+)//g'`
 
+  # replace our date format
+  m1="[0-9]\{4\}\.[0-9]\{2\}\.[0-9]\{2\}"
+  alb=`echo "$alb" | sed -e "s/^$m1\s[0-9]\{4\}\(\s\|\s-\s\)//"`
+  alb=`echo "$alb" | sed -e "s/^$m1//"`
+  alb=`trimEnds "$alb"`
+
   # remove I, II, III, IV, V from beginning
   rn=`matchRnSet "$alb"`
   if [ "$rn" != "" ]; then disc=" @$rn"; alb=`matchRnSet "$alb" "1"`; fi
@@ -245,13 +251,6 @@ formatAlbum () {
 
   # replace duplicate - & duplicate spaces
   alb=`echo "$alb" | sed -e "s/-\s*-/-/g" -e "s/-\+/-/g" -e "s/\s\+/ /g"`
-
-  # if ends in space then a single digit, digit is probably discnumber
-  dn2=`echo "$alb" | grep -o "\s\+[0-9]$" | grep -o "[0-9]$"`
-  if [ "$dn2" != "" ]; then
-    disc=" @$dn2"
-    alb=`echo "$alb" | sed -e "s/\s\+[0-9]$//"`
-  fi
 
   # remove bitrate from end
   alb=`echo "$alb" | sed -e 's/\s\+\(128\|192\|256\|320\)$//'`
@@ -376,6 +375,54 @@ handleArtwork () {
 }
 
 #-----------------------------------------------------------------------#
+# match title from filename
+
+matchTitle () {
+  newT="$1"
+
+  # file pattern: 's01t01', 'd01t01' OR 's1 01' OR 'd301'
+  p1=`echo "$newT" | grep -io '^\(s\|d\)[0-9]\{1,2\}[-t_\.\s]*[0-9]\+'`
+  if [ "$p1" != "" ]; then
+    newT=`echo "$newT" | sed 's/^\(s\|d\)//'`
+    discTag=`echo "$newT" | grep -o "^[0-9]\+"`
+    if [ "discTag" != "" ] && [ "${#discTag}" -gt "2" ]; then
+      if [ "${#discTag}" -eq "3" ]; then
+        discTag=`echo "$discTag" | grep -o "^[0-9]\{1\}"`
+        newT=`echo "$newT" | sed -e "s/^[0-9]\{1\}//"`
+      else
+        discTag=`echo "$discTag" | grep -o "^[0-9]\{2\}"`
+        newT=`echo "$newT" | sed -e "s/^[0-9]\{2\}//"`
+      fi
+    fi
+
+    newT=`echo "$newT" | sed -e "s/^[-t_\.\s]*//i"`
+    newT=`trimEnds "$newT"`
+  fi
+
+  # file pattern: nugs.net: sci160318d1_01_Shine.mp3, ph990710d1_01_Wilson.mp3
+  if [ "$(echo $newT | grep -io '^[a-z]\+[0-9]\+d[0-9]\+[-_ ]')" != "" ]; then
+    newT=`echo "$newT" | sed -e "s/^[a-z]\+[0-9]\+d//i"`
+    discTag=`echo "$newT" | grep -o "^[0-9]\+"`
+    newT=`echo "$newT" | sed -e "s/^[0-9]\+[-_ ]//"`
+  fi
+
+  # track from title tag
+  trackTag=`echo "$newT" | grep -o "^[0-9]\+"`
+
+  # remove track from filename & file extension
+  newT=`echo "$newT" | sed -e "s/^[0-9_-\s]\+//" | rev | \
+  sed -e "s/^[A-Z0-9]\+\.//i" | rev`
+
+  # title: replace certain chars with space or nothing
+  newT=`echo "$newT" | sed -e "s/[_-]/ /g" -e "s/\@//" -e 's/\<./\U&/g'`
+
+  # remove all junk
+  newT=`replaceNA "$newT"`; newT=`trimEnds "$newT"`
+
+  echo -e "$newT|$trackTag|$discTag"
+}
+
+#-----------------------------------------------------------------------#
 # $1 = path
 # $2 = artist
 # $3 = album
@@ -386,7 +433,7 @@ updateTags () {
   coverArt=`handleArtwork "$rootPath/$2/$1" "${files[0]}"`
   if [ "$coverArt" != "" ]; then echo "Art: '$coverArt'"; fi
 
-  i="0"; prevDisc=""
+  i="0"; prevDisc=""; prevTrack=0
   for f in "${files[@]}"; do
     i=$((i+1))
 
@@ -395,7 +442,7 @@ updateTags () {
 
     # get embedded tags
     artistTag=`id3Get "artist" "$f"`
-    if [ "$artistTag" = "" ]; then
+    if [ "$artistTag" = "" -o "$artistTag" = "<Unknown>" ]; then
       artistTag="$2"
     else
       # replace 'The' if matches similarily
@@ -407,77 +454,70 @@ updateTags () {
 
     # get filename by looking at path ( removing file extension )
     fN=`echo "$f" | rev | sed -e "s/\/.\+//" | rev`
+    IFS=$'\n'; fInfo=(`matchTitle "$fN" | sed -e "s/|/\n/g"`); unset IFS
 
-    # 1) start with disc number
+    # 1) disc: try from tag
     discTag=`id3Get "disc" "$f" | grep -o "^[0-9]\+"`
-
-    # file pattern: 's01t01', 'd01t01' OR 's01 01'
-    pm=`echo "$fN" | grep -io '^\(s\|d\)[0-9]\+[t_\.\s][0-9]\+'`
-    if [ "$pm" != "" ]; then
-      fN=`echo "$fN" | sed 's/^\(s\|d\)//'`
-      if [ "$discTag" = "" ]; then
-        discTag=`echo "$fN" | grep -o "^[0-9]\+"`
-      fi
-      fN=`echo "$fN" | sed -e "s/^[0-9]\+[t_\.\s]//i"`
-      fN=`trimEnds "$fN"`
-    fi
-
-    # file pattern: nugs.net: sci160318d1_01_Shine.mp3, ph990710d1_01_Wilson.mp3
-    if [ "$(echo $fN | grep -io '^[a-z]\+[0-9]\+d[0-9]\+[-_ ]')" != "" ]; then
-      fN=`echo "$fN" | sed -e "s/^[a-z]\+[0-9]\+d//i"`
-      if [ "$discTag" = "" ]; then
-        discTag=`echo "$fN" | grep -o "^[0-9]\+"`
-      fi
-      fN=`echo "$fN" | sed -e "s/^[0-9]\+[-_ ]//"`
-    fi
-
     if [ "$discTag" = "" ]; then
-      # try from album tag
+      # disc: try from filename
+      if [ "${fInfo[2]}" != "" ]; then discTag="${fInfo[2]}"; fi
+
+      # disc: try from album tag
       aTag=`id3Get "album" "$f"`
       m1=`formatAlbum "$aTag"`
       if [ "$m1" != "" ]; then discTag=`matchDiscInternal "$m1"`; fi
 
-      # try from path
+      # disc: try from path
       if [ "$discTag" = "" ]; then
         m2=`formatAlbum "$1"`
         discTag=`matchDiscInternal "$m2"`
       fi
 
+      # disc: try from last disc (on current album)
       if [ "$discTag" = "" ] && [ "$prevDisc" != "" ]; then
         discTag="$prevDisc"
       fi
     fi
 
-    # save in case next file has no disc tag
-    if [ "$discTag" != "" ]; then prevDisc="$discTag"; fi
+    # format disc
+    discTag=`echo "$discTag" | sed 's/^0*//'`
 
-    # 2) track: from tag
+    # 2) track: try from tag
     trackTag=`id3Get "track" "$f" | grep -o "^[0-9]\+"`
 
-    # track: from filename
-    if [ "$trackTag" = "" ]; then
-      trackTag=`echo "$fN" | grep -o "^[0-9]\+"`
+    # track: try from filename
+    if [ "$trackTag" = "" ] && [ "${fInfo[1]}" != "" ]; then
+      trackTag="${fInfo[1]}"
     fi
 
     # track: default to index+1
     if [ "$trackTag" = "" ]; then trackTag="$i"; fi
 
     # format track
-    trackTag=`echo "$trackTag" | sed 's/^0*//' | xargs printf %02d`
+    trackTag=`echo "$trackTag" | sed 's/^0*//'`
 
-    # remove track from filename & file extension
-    fN=`echo "$fN" | sed -e "s/^[0-9]\+[-_ ]*//" | rev | \
-    sed -e "s/^[A-Z0-9]\+\.//i" | rev`
+    # if no disc number, keep incrementing trackTag
+    if [ "$prevDisc" = "" ]; then
+      if [ "$trackTag" -lt "$((prevTrack+1))" ]; then
+        trackTag=$((prevTrack+1))
+      fi
+    fi
+
+    # disc: save for next iteration
+    prevTrack="$trackTag"
+    if [ "$discTag" != "" ]; then prevDisc="$discTag"; fi
+
+    # format track
+    trackTag=`echo "$trackTag" | xargs printf %02d`
 
     # 3) title
     titleTag=`id3Get "title" "$f"`
-    if [ "$titleTag" = "" ]; then titleTag="$fN"; fi
-
     if [ "$titleTag" != "" ]; then
-      # replace certain chars with space or nothing
-      titleTag=`echo "$titleTag" | sed -e "s/[_-]/ /g" -e "s/\@//"`
-      # remove all junk
-      titleTag=`replaceNA "$titleTag"`; titleTag=`trimEnds "$titleTag"`
+      # send tag Title through matchTitle again to sanitize
+      IFS=$'\n'; tInfo=(`matchTitle "$titleTag" | sed -e "s/|/\n/g"`); unset IFS
+      titleTag="${tInfo[0]}"
+    else
+      titleTag="${fInfo[0]}"
     fi
 
     if [ "$writeMode" = "1" ]; then
@@ -485,9 +525,6 @@ updateTags () {
       writeAudio "$f" "$artistTag" "$3" "$titleTag" "$trackTag" \
       "$discTag" "$coverArt"
     fi
-
-    # format track
-    trackTag=`echo "$trackTag" | sed 's/^0*//'`
 
     echo "$discTag $trackTag - $titleTag - $3 - $artistTag"
   done
@@ -598,11 +635,14 @@ matchDate () {
     match="$2[0-9]\{1,2\}[/.-]\{1\}[0-9]\{1,2\}[/.-]\{1\}[0-9]\{2\}$3"
     m1=`echo "$1" | grep -o "$match"`
     if [ "$m1" != "" ]; then
+      # match special case: 06-12/31 == year-mon/day
+      special=`echo "$m1" | grep -o "[0-9]\+-[0-9]\+\/[0-9]\+"`
+
       x1=`parseDayMon "$m1"`; m1=`nextDate "$m1"`
       x2=`parseDayMon "$m1"`; m1=`nextDate "$m1"`
       x3=`parseDayMon "$m1"`
 
-      if [ "$x1" -gt "12" ]; then
+      if [ "$x1" -gt "12" -o "$special" != "" ]; then
         # not month, must start with year
         year="$x1"; mon="$x2"; day="$x3"
       else
@@ -622,6 +662,7 @@ matchDate () {
     vd=`isValidDate $year $mon $day`
     if [ "$vd" != "" ]; then
       album=`echo "$1" | sed -e "s/$match//g"`
+      if [ "$album" = "" ]; then album='@'; fi
       echo -e "$album|$year|$mon|$day"
     fi
   fi
@@ -696,16 +737,21 @@ matchDateInAlbum () {
       fi
     fi
 
+    # remove case when also starts with 'year' or 'year -'
+    alb=`echo "$alb" | sed -e "s/^[0-9]\{4\}\(\s\|\s-\s\)//"`
+
     # format the album
     alb=`formatAlbum "$alb"`
 
     if [ "${dates[2]}" = "" ]; then
       # only have YEAR
-      echo "${dates[1]} $alb"
+      alb="${dates[1]} $alb"
     else
       # return in YEAR-MON-DAY format
-      echo "${dates[1]}.${dates[2]}.${dates[3]} $alb"
+      alb="${dates[1]}.${dates[2]}.${dates[3]} $alb"
     fi
+
+    alb=`trimEnds "$alb"`; echo "$alb"
   fi
 }
 
@@ -745,11 +791,10 @@ processDirectory () {
   if [ "${#files[@]}" -gt "0" ]; then
     dirName=`echo "$2" | rev | sed -e "s/\/.\+//" | rev`
 
-    # get embedded album tag from first audio file
-    for f in "${files[@]}"; do
-      albumTag=`id3Get "album" "$f"`
-      break
-    done
+    # get embedded album tag from LAST audio file
+    count="${#files[@]}"
+    lastFile=$((count-1))
+    albumTag=`id3Get "album" "${files[$lastFile]}"`
 
     matchAlbum=`matchDateInAlbum "$1" "$2" "$dirName" "$albumTag"`
     if [ "$matchAlbum" != "" ]; then
@@ -785,16 +830,9 @@ processDirectory () {
         updatePath "$1" "$2" "$matchAlbum"
       fi
     else
-      handleUnknown "$1/$2"
+      echo -e "\nunknown: '$1/$2'"
     fi
   fi
-}
-
-#-----------------------------------------------------------------------#
-# move path structure into $unknown direcotry
-
-handleUnknown() {
-  echo -e "\nunknown: '$1'"
 }
 
 #-----------------------------------------------------------------------#
@@ -816,7 +854,7 @@ processIndex () {
       if [ "$artist" != "" ]; then
         echo -e "\nArtist: $artist"
       else
-        handleUnknown "$p"
+        echo -e "\nunknown: '$p'"
       fi
     else
       # make sure directory path still exists
