@@ -413,7 +413,7 @@ handleArtwork () {
 # match title from filename
 
 matchTitle () {
-  newT="$1"
+  newT="$1"; discTag=""
 
   # file pattern: 's01t01', 'd01t01' OR 's1 01' OR 'd301'
   p1=`echo "$newT" | grep -io '^\(s\|d\)[0-9]\{1,2\}[-t_\.\s]*[0-9]\+'`
@@ -466,7 +466,7 @@ updateTags () {
   coverArt=`handleArtwork "$rootPath/$2/$1" "${files[0]}"`
   if [ "$coverArt" != "" ]; then echo "Art: '$coverArt'"; fi
 
-  i="0"; prevDisc=""; prevTrack=0
+  i="0"; prevDisc="0"; prevTrack="0"
   for f in "${files[@]}"; do
     i=$((i+1))
 
@@ -486,7 +486,7 @@ updateTags () {
     fi
 
     # get filename by looking at path ( removing file extension )
-    fN=`echo "$f" | rev | sed -e "s/\/.\+//" | rev`
+    fN=`echo "$f" | rev | sed -e "s/\/.\+//" -e "s/^[a-z0-9]\+\.//i" | rev`
     IFS=$'\n'; fInfo=(`matchTitle "$fN" | sed -e "s/|/\n/g"`); unset IFS
 
     # 1) disc: try from tag
@@ -545,7 +545,8 @@ updateTags () {
 
     # 3) title
     titleTag=`id3Get "title" "$f"`
-    if [ "$titleTag" != "" ]; then
+    matchReadError=`echo "$titleTag" | grep -io "cannot read bom value, input too short"`
+    if [ "$titleTag" != "" ] && [ "$matchReadError" = "" ]; then
       # send tag Title through matchTitle again to sanitize
       IFS=$'\n'; tInfo=(`matchTitle "$titleTag" | sed -e "s/|/\n/g"`); unset IFS
       titleTag="${tInfo[0]}"
@@ -556,7 +557,7 @@ updateTags () {
     if [ "$writeMode" = "1" ]; then
       # actually update the tag
       writeAudio "$f" "$artistTag" "$3" "$titleTag" "$trackTag" \
-      "$discTag" "$coverArt" "$toConvert"
+      "$discTag" "$coverArt" "$4"
     fi
 
     echo "$discTag $trackTag - $titleTag - $3 - $artistTag"
