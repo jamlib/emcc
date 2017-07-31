@@ -459,9 +459,7 @@ matchTitle () {
 }
 
 #-----------------------------------------------------------------------#
-# $1 = path
-# $2 = artist
-# $3 = album
+# $1=path $2=artist $3=album $4=toConvert
 
 updateTags () {
   IFS=$'\n'; files=(`findAudio "$rootPath/$2/$1"`); unset IFS
@@ -559,7 +557,7 @@ updateTags () {
     if [ "$writeMode" = "1" ]; then
       # actually update the tag
       writeAudio "$f" "$artistTag" "$3" "$titleTag" "$trackTag" \
-      "$discTag" "$coverArt"
+      "$discTag" "$coverArt" "$toConvert"
     fi
 
     echo "$discTag $trackTag - $titleTag - $3 - $artistTag"
@@ -567,13 +565,21 @@ updateTags () {
 }
 
 #-----------------------------------------------------------------------#
-# $1=file $2=artist $3=album $4=title $5=track $6=disc $7=artwork
+# $1=file $2=artist $3=album $4=title $5=track $6=disc $7=artwork $8=toConvert
 
 writeAudio () {
   parentPath=`echo "$1" | grep -o ".*\/"`
 
-  # pull file extension from end of file path
-  ext=`echo "$1" | grep -o "\.[A-Za-z0-9]\+$" | sed -e "s/^\.//"`
+  if [ "$8" != "" ]; then
+    # we are converting to mp3
+    ext="mp3"
+    # convert using V0; TODO: add option for 320CBR
+    convert="-codec:a libmp3lame -qscale:a 0"
+  else
+    # pull file extension from end of file path
+    ext=`echo "$1" | grep -o "\.[A-Za-z0-9]\+$" | sed -e "s/^\.//"`
+    convert="-c:a copy"
+  fi
 
   file="$parentpath"
   # add disc to filename (if exists)
@@ -590,13 +596,13 @@ writeAudio () {
 
   # determine if artwork is also input
   if [ "$7" != "" ] && [ "$noID3" = "" ]; then
-    ffmpeg -i "$1" -i "$7" -map 0:a -c:a copy -metadata artist="$2" \
+    ffmpeg -i "$1" -i "$7" -map 0:a $convert -metadata artist="$2" \
     -metadata album_artist="$2" -metadata album="$3" -metadata title="$4" \
     -metadata track="$5" -metadata disc="$6" -map 1:v -c:v copy \
     -metadata:s:v title="Album cover" -metadata:s:v comment="Cover (Front)" \
     $ffmpegArgs "$file" 2>/dev/null
   else
-    ffmpeg -i "$1" -map 0:a -c:a copy -metadata artist="$2" \
+    ffmpeg -i "$1" -map 0:a $convert -metadata artist="$2" \
     -metadata album_artist="$2" -metadata album="$3" -metadata title="$4" \
     -metadata track="$5" -metadata disc="$6" $ffmpegArgs "$file" 2>/dev/null
   fi
@@ -792,32 +798,6 @@ matchDateInAlbum () {
 }
 
 #-----------------------------------------------------------------------#
-# $1=$matchAlbum $2=$artist $3=$path
-
-checkDuplicate () {
-  mYear=`echo "$1" | grep -o "[0-9]\{4\}"`
-  mDate=`echo "$1" | grep -o "[0-9]\{4\}.[0-9]\{2\}.[0-9]\{2\}"`
-
-  mPath=`echo "$rootPath/$2/$mYear/$mDate" | sed -e "s/\//\\\\\\\\\//g"`
-
-  dup=""
-  for p in "${paths[@]}"; do
-    m1=`echo "$p" | grep -o "$mPath"`
-    if [ "$m1" != "" ]; then dup="$p"; fi
-  done
-
-  notCur=`echo "$rootPath/$2/$3" | grep -o "$mPath"`
-  if [ "$dup" != "" ] && [ "$notCur" = "" ]; then
-    IFS=$'\n'; countFiles=(`findAudio "$dup"`); unset IFS
-    if [ "${#countFiles[@]}" -gt "0" ]; then
-      echo "$dup"
-    else
-      rm -r "$dup"
-    fi
-  fi
-}
-
-#-----------------------------------------------------------------------#
 # process sub-folders containing audio files
 # $1 = $artist
 # $2 = path w/o artist
@@ -834,28 +814,30 @@ processDirectory () {
 
     matchAlbum=`matchDateInAlbum "$1" "$2" "$dirName" "$albumTag"`
     if [ "$matchAlbum" != "" ]; then
-
-      # TODO: not sure how to handle duplicates
-      #checkDup=`checkDuplicate "$matchAlbum" "$1" "$2"`
-
       echo -e "\n${#files[@]} files: in '$2'"
 
       # replace discnumber ie ' @1'
       matchAlbum=`matchDiscInternal "$matchAlbum" "1"`
 
-      # check album tag
-      if [ "$albumTag" != "$matchAlbum" ]; then
-        updateTags "$2" "$1" "$matchAlbum"
+      # add audio file .ext to path if bitrate >320
+      toConvert=""
+      ext=`getFileExt "${files[0]}"`
+      bitrate=`getBitrate "${files[0]}"`
+      
+      # high bitrate must be flac/alac/wav/shn/etc
+      if [ "$bitrate" -gt "420000" ]; then
+        # skip if on keep list, else convert
+        skipKeep=`onKeepList "$rootPath/$1/$2"`
+        if [ "$skipKeep" = "" ]; then toConvert="true"; fi
       fi
 
-      # filename may have changed
-      IFS=$'\n'; bf=(`findAudio "$rootPath/$1/$2"`); unset IFS
+      # check album tag
+      if [ "$albumTag" != "$matchAlbum" -o "$toConvert" != "" ]; then
+        updateTags "$2" "$1" "$matchAlbum" "$toConvert"
+      fi
 
-      # add audio file .ext to path if bitrate >320
-      bitrate=`getBitrate "${bf[0]}"`
-      if [ "$bitrate" -gt "400000" ]; then
-        # must be flac or better; include ext in folder path
-        ext=`getFileExt "${bf[0]}"`
+      if [ "$bitrate" -gt "420000" ] && [ "$toConvert" = "" ]; then
+        # add file extension to HQ audio to keep
         matchAlbum="$matchAlbum - $ext"
       fi
 
@@ -868,6 +850,20 @@ processDirectory () {
     else
       echo -e "\nunknown: '$1/$2'"
     fi
+  fi
+}
+
+#-----------------------------------------------------------------------#
+# do not convert high bitrate audio files to mp3 if match path
+
+onKeepList () {
+  if [ -f "$rootPath/.emcc-keep" ]; then
+    IFS=$'\n'; kPaths=(`cat "$rootPath/.emcc-keep"`); unset IFS
+    found=""
+    for keep in "${kPaths[@]}"; do
+      if [[ $1 == *"$keep"* ]]; then found="$1"; break; fi
+    done
+    if [ "$found" != "" ]; then echo "$found"; fi
   fi
 }
 
