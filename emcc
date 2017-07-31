@@ -262,17 +262,15 @@ trimEnds () {
 # $1 = album
 
 formatAlbum () {
-  # replace any character not allowed
-  alb=`replaceNA "$alb"`; alb=`trimEnds "$alb"`
-
   # reset disc; replace @ before we use as disc number identifier
   disc=""; alb=`echo "$1" | sed -e 's/\@//g' -e 's/([0-9]\+)//g'`
 
-  # replace our date format
-  m1="[0-9]\{4\}\.[0-9]\{2\}\.[0-9]\{2\}"
-  alb=`echo "$alb" | sed -e "s/^$m1\s[0-9]\{4\}\(\s\|\s-\s\)//"`
-  alb=`echo "$alb" | sed -e "s/^$m1//"`
-  alb=`trimEnds "$alb"`
+  # match and remove any full date from album
+  mD=`matchDate "$alb" | sed -e "s/|.\+//"`
+  if [ "$mD" != "" ]; then alb="$mD"; fi
+
+  # replace any character not allowed
+  alb=`replaceNA "$alb"`; alb=`trimEnds "$alb"`
 
   # remove I, II, III, IV, V from beginning
   rn=`matchRnSet "$alb"`
@@ -303,9 +301,7 @@ formatAlbum () {
 }
 
 #-----------------------------------------------------------------------#
-# $1 = artist
-# $2 = path
-# $3 = matchAlbum
+# $1=artist $2=path $3=matchAlbum
 
 updatePath () {
   if [ "$writeMode" = "1" ]; then
@@ -496,9 +492,11 @@ updateTags () {
       if [ "${fInfo[2]}" != "" ]; then discTag="${fInfo[2]}"; fi
 
       # disc: try from album tag
-      aTag=`id3Get "album" "$f"`
-      m1=`formatAlbum "$aTag"`
-      if [ "$m1" != "" ]; then discTag=`matchDiscInternal "$m1"`; fi
+      if [ "$discTag" = "" ]; then
+        aTag=`id3Get "album" "$f"`
+        m1=`formatAlbum "$aTag"`
+        if [ "$m1" != "" ]; then discTag=`matchDiscInternal "$m1"`; fi
+      fi
 
       # disc: try from path
       if [ "$discTag" = "" ]; then
@@ -704,6 +702,8 @@ matchDate () {
     vd=`isValidDate $year $mon $day`
     if [ "$vd" != "" ]; then
       album=`echo "$1" | sed -e "s/$match//g"`
+      # replace the instance of 'year.mon.day year'
+      album=`trimEnds "$album" | sed -e "s/^[0-9]\{4\}\(\s\|\s-\s\)//"`
       if [ "$album" = "" ]; then album='@'; fi
       echo -e "$album|$year|$mon|$day"
     fi
