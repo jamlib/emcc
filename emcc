@@ -499,6 +499,12 @@ updateTags () {
       if [ "$matchSpace" = "" ]; then artistTag="$artistTag, The"; fi
     fi
 
+    # replace 'Dead and Company' with 'Dead & Company' if that's artist dir
+    if [ "$(echo $2 | grep -o '&')" != "" ]; then
+      mAnd=`echo "$artistTag" | sed -e "s/ and / \& /ig"`
+      if [ "$mAnd" = "$2" ]; then artistTag="$mAnd"; fi
+    fi
+
     # get filename by looking at path ( removing file extension )
     fN=`echo "$f" | rev | sed -e "s/\/.\+//" -e "s/^[a-z0-9]\+\.//i" | rev`
     IFS=$'\n'; fInfo=(`matchTitle "$fN" | sed -e "s/|/\n/g"`); unset IFS
@@ -547,7 +553,10 @@ updateTags () {
     trackTag=`echo "$trackTag" | sed 's/^0*//'`
 
     # if no disc number, keep incrementing trackTag
-    if [ "$prevDisc" = "0" ]; then
+    mTag="$discTag"
+    if [ "$mTag" = "" ]; then mTag="0"; fi
+
+    if [ "$prevDisc" = "0" -o "$mTag" -eq "$prevDisc" ]; then
       if [ "$trackTag" -lt "$((prevTrack+1))" ]; then
         trackTag=$((prevTrack+1))
       fi
@@ -555,9 +564,7 @@ updateTags () {
 
     # disc: save for next iteration
     prevTrack="$trackTag"
-    if [ "$discTag" != "" ] && [ "$prevDisc" != "0" ]; then
-      prevDisc="$discTag"
-    fi
+    if [ "$discTag" != "" ]; then prevDisc="$discTag"; fi
 
     # format track
     trackTag=`echo "$trackTag" | xargs printf %02d`
