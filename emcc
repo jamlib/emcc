@@ -137,7 +137,7 @@ findAudio () {
 # album tag from audio file using ffprobe
 
 id3Get () {
-  ffprobe -loglevel error -show_entries format_tags="$1" \
+  ffprobe -loglevel panic -show_entries format_tags="$1" \
   -of default=noprint_wrappers=1:nokey=1 "$2" 2>&1
 }
 
@@ -265,13 +265,11 @@ trimEnds () {
 formatAlbum () {
   # reset disc; replace @ before we use as disc number identifier
   disc=""; alb=`echo "$1" | sed -e 's/\@//g' -e 's/([0-9]\+)//g'`
+  alb=`trimEnds "$alb"`
 
   # match and remove any full date from album
   mD=`matchDate "$alb" | sed -e "s/|.\+//"`
   if [ "$mD" != "" ]; then alb="$mD"; fi
-
-  # replace any character not allowed
-  alb=`replaceNA "$alb"`; alb=`trimEnds "$alb"`
 
   # remove I, II, III, IV, V from beginning
   rn=`matchRnSet "$alb"`
@@ -280,6 +278,9 @@ formatAlbum () {
   # remove CD1, disc1, disc 1, cd 1
   dn=`matchDisc "$alb"`
   if [ "$dn" != "" ]; then disc=" @$dn"; alb=`matchDisc "$alb" "1"`; fi
+
+  # replace any character not allowed
+  alb=`replaceNA "$alb"`; alb=`trimEnds "$alb"`
 
   # replace ', Ny' with ', NY'
   alb=`capitalizeStateCode "$alb"`
@@ -460,7 +461,7 @@ matchTitle () {
 }
 
 #-----------------------------------------------------------------------#
-# $1=path $2=artist $3=album
+# $1=path $2=artist $3=album $4=skipConvert
 
 updateTags () {
   IFS=$'\n'; files=(`findAudio "$rootPath/$2/$1"`); unset IFS
@@ -569,7 +570,7 @@ updateTags () {
     if [ "$writeMode" = "1" ]; then
       # actually update the tag
       writeAudio "$f" "$artistTag" "$3" "$titleTag" "$trackTag" \
-      "$discTag" "$coverArt"
+      "$discTag" "$coverArt" "$4"
     fi
 
     echo "$discTag $trackTag - $titleTag - $3 - $artistTag"
@@ -577,7 +578,7 @@ updateTags () {
 }
 
 #-----------------------------------------------------------------------#
-# $1=file $2=artist $3=album $4=title $5=track $6=disc $7=artwork
+# $1=file $2=artist $3=album $4=title $5=track $6=disc $7=artwork $8=skipConvert
 
 writeAudio () {
   parentPath=`echo "$1" | grep -o ".*\/"`
@@ -585,12 +586,9 @@ writeAudio () {
   # pull file extension from end of file path
   ext=`echo "$1" | grep -o "\.[A-Za-z0-9]\+$" | sed -e "s/^\.//" -e "s/./\L&/g"`
 
-  # skip if on keep list, else convert
-  skipKeep=`onKeepList "$parentPath"`
-  if [ "$ext" = "mp3" -o "$skipKeep" != "" ]; then
+  if [ "$ext" = "mp3" -o "$8" != "" ]; then
     convert="-c:a copy"
   else
-    echo -e "Converting: '$ext' to 'mp3'"
     ext="mp3"; convert="-codec:a libmp3lame"
     bitrate=`getBitrate "$1"`
     if [ "$bitR" -eq "320" ] && [ "$bitrate" -gt "320000" ]; then
@@ -839,18 +837,34 @@ processDirectory () {
 
       # replace discnumber ie ' @1'
       matchAlbum=`matchDiscInternal "$matchAlbum" "1"`
+      mYear=`echo "$matchAlbum" | grep -o "^[0-9]\{4\}"`
 
-      # add audio file .ext to path if bitrate >320
-      ext=`getFileExt "${files[0]}"`
+      # remove (x) & file extension from name
+      matchFolder=`echo "$2" | sed -e "s/ ([0-9]\+)$//" -e "s/ - $ext$//"`
 
-      # check album tag
-      if [ "$albumTag" != "$matchAlbum" ]; then
-        updateTags "$2" "$1" "$matchAlbum"
+      # skip if on keep list, else convert
+      skipKeep=`onKeepList "$rootPath/$1/$matchFolder"`
+      if [ "$skipKeep" != "" ]; then skipConvert="true"; fi
+
+      ext="" # if any file is not mp3, it should be processed
+      for f in "${files[@]}"; do
+        extGet=`getFileExt "${files[0]}"`
+        if [ "$ext" = "" -o "$ext" = "MP3" ]; then ext="$extGet"; fi
+      done
+
+      if [ "$skipConvert" != "true" ] && [ "$ext" != "MP3" ]; then
+        echo -e "Converting: '$ext' to 'mp3'"
       fi
 
+      # process audio files if album tag diff or not mp3
+      if [ "$albumTag" != "$matchAlbum" -o "$ext" != "MP3" ]; then
+        updateTags "$2" "$1" "$matchAlbum" "$skipConvert"
+      fi
+
+      # if we converted, new format is mp3
+      if [ "$skipConvert" = "true" ]; then ext="MP3"; fi
+
       # check folder name
-      mYear=`echo "$matchAlbum" | grep -o "^[0-9]\{4\}"`
-      matchFolder=`echo "$2" | sed -e "s/ ([0-9]\+)$//" -e "s/ - $ext$//"`
       if [ "$mYear/$matchAlbum" != "$matchFolder" ]; then
         echo -e "path: update to: '$mYear/$matchAlbum'"
         newPath=`updatePath "$1" "$2" "$matchAlbum" "$ext"`
@@ -927,14 +941,17 @@ processIndex () {
 # main
 
 if [ $# -eq 0 ]; then
-  echo -e "\nUsage: emcc [path] [mode] [bitrate]\n"; exit 1
-fi
-
-if [ ! -d "$1" ]; then
-  echo -e "\nError: '$1' not a directory\n"; exit 1
+  echo -e "\nUsage: emcc [path] [mode] [bitrate]"
+  echo -e "path: ex: /media/ExternalHD/Music"
+  echo -e "mode: 0=simulate | 1=make changes"
+  echo -e "bitrate: V0=256VBR | 320=320CBR\n"
+  exit 1
 fi
 
 rootPath="$1"
+if [ ! -d "$1" ]; then
+  echo -e "\nError: '$1' not a directory\n"; exit 1
+fi
 
 # set mode
 writeMode="$2"
@@ -956,5 +973,7 @@ echo "$paths" > "$rootPath/.emcc-current"
 
 IFS=$'\n'; paths=("$paths"); unset IFS
 processIndex
+
+rm -f "$rootPath/.emcc-current"
 
 echo -e "\nemcc finished. Exiting.\n"
