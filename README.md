@@ -50,7 +50,9 @@ However, when mode is `1`, changes will be made.
 
 ### Bitrate
 
-Bitrate options are either `blank` which defaults to `V0`, `V0` or `320`.
+Bitrate options are either `blank` which defaults to `256`, `256` or `320`.
+
+`256` is encoded `V0` with `lame`.
 
 ## Work-in-Progress
 

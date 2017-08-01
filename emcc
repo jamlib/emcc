@@ -137,8 +137,11 @@ findAudio () {
 # album tag from audio file using ffprobe
 
 id3Get () {
-  ffprobe -loglevel panic -show_entries format_tags="$1" \
-  -of default=noprint_wrappers=1:nokey=1 "$2" 2>&1
+  id3Tag=`ffprobe -loglevel panic -show_entries format_tags="$1" \
+  -of default=noprint_wrappers=1:nokey=1 "$2" 2>&1`
+
+  readErr=`echo "$id3Tag" | grep -io "cannot read bom value"`
+  if [ "$readErr" = "" ]; then echo "$id3Tag"; fi
 }
 
 #-----------------------------------------------------------------------#
@@ -474,26 +477,26 @@ updateTags () {
     i=$((i+1))
 
     bitrate=`getBitrate "$f"`
-    if [ "$bitrate" -eq "0" ]; then continue; fi
+    if [ "$bitrate" -eq "0" ]; then
+      echo "Corrupt audio file: '$f'. Removing."
+      rm -f "$f"; continue
+    fi
 
-    # get embedded tags
+    # artist tag
     artistTag=`id3Get "artist" "$f"`
     if [ "$artistTag" = "" -o "$artistTag" = "<Unknown>" ]; then
       artistTag="$2"
-    else
-      # replace 'The' if matches similarily
-      mThe=`echo "$2" | grep -io "\bthe"`
-      if [ "$mThe" != "" ]; then
-        cA=`echo "$2" | sed -e "s/^the //i" -e "s/, the$//i"`
-        if [[ $artistTag == *"$cA"* ]]; then
-          matchSpace=`echo "$cA" | grep -o "\s\+"`
-          if [ "$matchSpace" != "" ]; then
-            artistTag="$cA"
-          else
-            artistTag="$cA, The"
-          fi
-        fi
-      fi
+    fi
+
+    # replace 'The' if matches similarily
+    mThe=`echo "$artistTag" | grep -io "^the "`
+    if [ "$mThe" = "" ]; then
+      mThe=`echo "$artistTag" | grep -io ", the$"`
+    fi
+    if [ "$mThe" != "" ]; then
+      artistTag=`echo "$artistTag" | sed -e "s/^the //i" -e "s/, the$//i"`
+      matchSpace=`echo "$artistTag" | grep -o "\s\+"`
+      if [ "$matchSpace" = "" ]; then artistTag="$artistTag, The"; fi
     fi
 
     # get filename by looking at path ( removing file extension )
@@ -558,8 +561,7 @@ updateTags () {
 
     # 3) title
     titleTag=`id3Get "title" "$f"`
-    matchReadError=`echo "$titleTag" | grep -io "cannot read bom value, input too short"`
-    if [ "$titleTag" != "" ] && [ "$matchReadError" = "" ]; then
+    if [ "$titleTag" != "" ]; then
       # send tag Title through matchTitle again to sanitize
       IFS=$'\n'; tInfo=(`matchTitle "$titleTag" | sed -e "s/|/\n/g"`); unset IFS
       titleTag="${tInfo[0]}"
@@ -827,8 +829,7 @@ processDirectory () {
     dirName=`echo "$2" | rev | sed -e "s/\/.\+//" | rev`
 
     # get embedded album tag from LAST audio file
-    count="${#files[@]}"
-    lastFile=$((count-1))
+    count="${#files[@]}"; lastFile=$((count-1))
     albumTag=`id3Get "album" "${files[$lastFile]}"`
 
     matchAlbum=`matchDateInAlbum "$1" "$2" "$dirName" "$albumTag"`
@@ -944,7 +945,7 @@ if [ $# -eq 0 ]; then
   echo -e "\nUsage: emcc [path] [mode] [bitrate]"
   echo -e "path: ex: /media/ExternalHD/Music"
   echo -e "mode: 0=simulate | 1=make changes"
-  echo -e "bitrate: V0=256VBR | 320=320CBR\n"
+  echo -e "bitrate: 256=256VBR | 320=320CBR\n"
   exit 1
 fi
 
@@ -959,7 +960,7 @@ if [ "$writeMode" = "" ]; then writeMode="0"; fi
 
 # target bitrate
 bitR="$3"
-if [ "$bitR" != "320" ]; then bitR="V0"; fi
+if [ "$bitR" != "320" ]; then bitR="256"; fi
 
 checkPreReq
 startupWarning
