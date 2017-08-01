@@ -247,7 +247,8 @@ matchRnSet () {
 
 replaceNA () {
   echo "$1" | sed -e "s/(\s*)//g" -e 's/\]//g' -e 's/\[//g' \
-  -e 's/[\*\!\:\*\$\?\/\"\;\{\}]//g' -e "s/[^A-Za-z0-9 .,-&]\+/-/g"
+  -e 's/[\*\!\:\*\$\?\/\"\;\{\}]//g' -e "s/[^A-Za-z0-9 .,-&]\+/-/g" \
+  -e 's/  / /g'
 }
 
 #-----------------------------------------------------------------------#
@@ -414,8 +415,6 @@ handleArtwork () {
 matchTitle () {
   newT="$1"; discTag=""
 
-  echo "'$newT'" >/tmp/emcc
-
   # file pattern: 's01t01', 'd01t01' OR 's1 01' OR 'd301'
   p1=`echo "$newT" | grep -io '^\(s\|d\)[0-9]\{1,2\}[-t_\.\s]*[0-9]\+'`
   if [ "$p1" != "" ]; then
@@ -452,7 +451,7 @@ matchTitle () {
   sed -e "s/^[A-Z0-9]\+\.//i" | rev`
 
   # title: replace certain chars with space or nothing
-  newT=`echo "$newT" | sed -e "s/[_-]/ /g" -e "s/\@//" -e 's/\<./\U&/g'`
+  newT=`echo "$newT" | sed -e "s/[_-]/ /g" -e "s/\@//" -e 's/[^ ]*/\u&/g'`
 
   # remove all junk
   newT=`replaceNA "$newT"`; newT=`trimEnds "$newT"`
@@ -482,13 +481,16 @@ updateTags () {
       artistTag="$2"
     else
       # replace 'The' if matches similarily
-      cA=`echo "$2" | sed -e "s/^the //i" -e "s/, the$//i"`
-      if [[ $artistTag == *"$cA"* ]]; then
-        matchSpace=`echo "$cA" | grep -o "\s\+"`
-        if [ "$matchSpace" != "" ]; then
-          artistTag="$cA"
-        else
-          artistTag="$cA, The"
+      mThe=`echo "$2" | grep -io "\bthe"`
+      if [ "$mThe" != "" ]; then
+        cA=`echo "$2" | sed -e "s/^the //i" -e "s/, the$//i"`
+        if [[ $artistTag == *"$cA"* ]]; then
+          matchSpace=`echo "$cA" | grep -o "\s\+"`
+          if [ "$matchSpace" != "" ]; then
+            artistTag="$cA"
+          else
+            artistTag="$cA, The"
+          fi
         fi
       fi
     fi
@@ -584,14 +586,18 @@ writeAudio () {
   ext=`echo "$1" | grep -o "\.[A-Za-z0-9]\+$" | sed -e "s/^\.//" -e "s/./\L&/g"`
 
   # skip if on keep list, else convert
-  skipKeep=`onKeepList "$rootPath/$1/$2"`
+  skipKeep=`onKeepList "$parentPath"`
   if [ "$ext" = "mp3" -o "$skipKeep" != "" ]; then
     convert="-c:a copy"
   else
     echo -e "Converting: '$ext' to 'mp3'"
-    ext="mp3"
-    # convert using V0; TODO: add option for 320CBR
-    convert="-codec:a libmp3lame -qscale:a 0"
+    ext="mp3"; convert="-codec:a libmp3lame"
+    bitrate=`getBitrate "$1"`
+    if [ "$bitR" -eq "320" ] && [ "$bitrate" -gt "320000" ]; then
+      convert="$convert -b:a 320k"
+    else
+      convert="$convert -qscale:a 0"
+    fi
   fi
 
   file="$parentpath"
@@ -921,7 +927,7 @@ processIndex () {
 # main
 
 if [ $# -eq 0 ]; then
-  echo -e "\nUsage: emcc [path] [mode]\n"; exit 1
+  echo -e "\nUsage: emcc [path] [mode] [bitrate]\n"; exit 1
 fi
 
 if [ ! -d "$1" ]; then
@@ -933,6 +939,10 @@ rootPath="$1"
 # set mode
 writeMode="$2"
 if [ "$writeMode" = "" ]; then writeMode="0"; fi
+
+# target bitrate
+bitR="$3"
+if [ "$bitR" != "320" ]; then bitR="V0"; fi
 
 checkPreReq
 startupWarning

@@ -2,12 +2,22 @@
 
 This is a process for cleaning up a live music collection according to specific rules.
 
-The file structure is as follows:
+The file structure for live music is:
 
 ```
-Artist/
-  YEAR/
-    YEAR.MON.DAY Venue, City, StateCode - Info
+Music/
+  Artist/
+    YEAR/
+      YEAR.MON.DAY Venue, City, StateCode - Info
+```
+
+Likewise, the file structure for studio music is:
+
+```
+Music/
+  Artist/
+    YEAR/
+      YEAR Album
 ```
 
 ## Installation
@@ -29,8 +39,18 @@ git pull
 ## Usage
 
 ```
-emcc [location]
+emcc [path] [mode] [bitrate]
 ```
+
+### Mode
+
+When `mode` is `0` or `blank`, the process will run in simulation and not make any changes.
+
+However, when mode is `1`, changes will be made.
+
+### Bitrate
+
+Bitrate options are either `blank` which defaults to `V0`, `V0` or `320`.
 
 ## Work-in-Progress
 
