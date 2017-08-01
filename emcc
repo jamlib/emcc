@@ -59,7 +59,7 @@ findAndExtractArchives () {
       aName=`echo "$arch" | rev | sed -e "s/\/.\+//" | rev | \
       sed -e "s/\..\+$//"`
 
-      echo -e "Extracting: $aName..."
+      echo -e "Extracting: $arch..."
 
       # find out if archive is X files (in which case create folder)
       fileCount=`7z l "$arch" | tail -1 | grep -o "[0-9]\+ files" | \
@@ -588,7 +588,10 @@ writeAudio () {
   # pull file extension from end of file path
   ext=`echo "$1" | grep -o "\.[A-Za-z0-9]\+$" | sed -e "s/^\.//" -e "s/./\L&/g"`
 
-  if [ "$ext" = "mp3" -o "$8" != "" ]; then
+  skipConv=""
+  if [ "$8" != "" ] && [ "$ext" = "flac" ]; then skipConv="true"; fi
+
+  if [ "$ext" = "mp3" -o "$skipConv" = "true" ]; then
     convert="-c:a copy"
   else
     ext="mp3"; convert="-codec:a libmp3lame"
@@ -844,6 +847,7 @@ processDirectory () {
       matchFolder=`echo "$2" | sed -e "s/ ([0-9]\+)$//" -e "s/ - $ext$//"`
 
       # skip if on keep list, else convert
+      skipConvert=""
       skipKeep=`onKeepList "$rootPath/$1/$matchFolder"`
       if [ "$skipKeep" != "" ]; then skipConvert="true"; fi
 
@@ -853,8 +857,12 @@ processDirectory () {
         if [ "$ext" = "" -o "$ext" = "MP3" ]; then ext="$extGet"; fi
       done
 
-      if [ "$skipConvert" != "true" ] && [ "$ext" != "MP3" ]; then
+      if [ "$skipConvert" != "true" -o "$ext" != "FLAC" ] \
+        && [ "$ext" != "MP3" ]; then
         echo -e "Converting: '$ext' to 'mp3'"
+        newExt="MP3"
+      else
+        newExt="$ext"
       fi
 
       # process audio files if album tag diff or not mp3
@@ -862,13 +870,10 @@ processDirectory () {
         updateTags "$2" "$1" "$matchAlbum" "$skipConvert"
       fi
 
-      # if we converted, new format is mp3
-      if [ "$skipConvert" = "true" ]; then ext="MP3"; fi
-
       # check folder name
       if [ "$mYear/$matchAlbum" != "$matchFolder" ]; then
         echo -e "path: update to: '$mYear/$matchAlbum'"
-        newPath=`updatePath "$1" "$2" "$matchAlbum" "$ext"`
+        newPath=`updatePath "$1" "$2" "$matchAlbum" "$newExt"`
       else
         newPath="$2"
       fi
