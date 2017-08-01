@@ -441,8 +441,8 @@ matchTitle () {
   fi
 
   # file pattern: nugs.net: sci160318d1_01_Shine.mp3, ph990710d1_01_Wilson.mp3
-  if [ "$(echo $newT | grep -io '^[a-z]\+[0-9]\+d[0-9]\+[-_ ]')" != "" ]; then
-    newT=`echo "$newT" | sed -e "s/^[a-z]\+[0-9]\+d//i"`
+  if [ "$(echo $newT | grep -io '^[a-z]\+[0-9-]\+d[0-9]\+[-_ ]')" != "" ]; then
+    newT=`echo "$newT" | sed -e "s/^[a-z]\+[0-9-]\+d//i"`
     discTag=`echo "$newT" | grep -o "^[0-9]\+"`
     newT=`echo "$newT" | sed -e "s/^[0-9]\+[-_ ]//"`
   fi
@@ -839,6 +839,12 @@ processDirectory () {
     if [ "$matchAlbum" != "" ]; then
       echo -e "\n${#files[@]} files: in '$2'"
 
+      ext="" # if any file is not mp3, it should be processed
+      for f in "${files[@]}"; do
+        extGet=`getFileExt "${files[0]}"`
+        if [ "$ext" = "" -o "$ext" = "MP3" ]; then ext="$extGet"; fi
+      done
+
       # replace discnumber ie ' @1'
       matchAlbum=`matchDiscInternal "$matchAlbum" "1"`
       mYear=`echo "$matchAlbum" | grep -o "^[0-9]\{4\}"`
@@ -851,12 +857,6 @@ processDirectory () {
       skipKeep=`onKeepList "$rootPath/$1/$matchFolder"`
       if [ "$skipKeep" != "" ]; then skipConvert="true"; fi
 
-      ext="" # if any file is not mp3, it should be processed
-      for f in "${files[@]}"; do
-        extGet=`getFileExt "${files[0]}"`
-        if [ "$ext" = "" -o "$ext" = "MP3" ]; then ext="$extGet"; fi
-      done
-
       if [ "$skipConvert" != "true" -o "$ext" != "FLAC" ] \
         && [ "$ext" != "MP3" ]; then
         echo -e "Converting: '$ext' to 'mp3'"
@@ -867,7 +867,9 @@ processDirectory () {
 
       # process audio files if album tag diff or not mp3
       if [ "$albumTag" != "$matchAlbum" -o "$ext" != "MP3" ]; then
-        updateTags "$2" "$1" "$matchAlbum" "$skipConvert"
+        if [ "$skipConvert" != "true" -o "$ext" != "FLAC" ]; then
+          updateTags "$2" "$1" "$matchAlbum" "$skipConvert"
+        fi
       fi
 
       # check folder name
