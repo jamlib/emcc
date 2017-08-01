@@ -505,6 +505,7 @@ updateTags () {
 
     # 1) disc: try from tag
     discTag=`id3Get "disc" "$f" | grep -o "^[0-9]\+"`
+
     if [ "$discTag" = "" ]; then
       # disc: try from filename
       if [ "${fInfo[2]}" != "" ]; then discTag="${fInfo[2]}"; fi
@@ -523,7 +524,7 @@ updateTags () {
       fi
 
       # disc: try from last disc (on current album)
-      if [ "$discTag" = "" ] && [ "$prevDisc" != "" ]; then
+      if [ "$discTag" = "" ] && [ "$prevDisc" != "0" ]; then
         discTag="$prevDisc"
       fi
     fi
@@ -546,7 +547,7 @@ updateTags () {
     trackTag=`echo "$trackTag" | sed 's/^0*//'`
 
     # if no disc number, keep incrementing trackTag
-    if [ "$prevDisc" = "" ]; then
+    if [ "$prevDisc" = "0" ]; then
       if [ "$trackTag" -lt "$((prevTrack+1))" ]; then
         trackTag=$((prevTrack+1))
       fi
@@ -554,7 +555,9 @@ updateTags () {
 
     # disc: save for next iteration
     prevTrack="$trackTag"
-    if [ "$discTag" != "" ]; then prevDisc="$discTag"; fi
+    if [ "$discTag" != "" ] && [ "$prevDisc" != "0" ]; then
+      prevDisc="$discTag"
+    fi
 
     # format track
     trackTag=`echo "$trackTag" | xargs printf %02d`
@@ -920,6 +923,8 @@ processIndex () {
   IFS=$'\n'; paths=($newPaths); unset IFS
 
   for p in "${paths[@]}"; do
+    if [ ! -d "$p" ]; then continue; fi
+
     # trim $rootPath from path
     p=`echo "$p" | sed -r "s/^.{${#rootPath}}\///"`
 
