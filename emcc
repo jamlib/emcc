@@ -40,7 +40,7 @@ removeHiddenDirectories () {
     if [[ "$response" =~ ^([yY][eE][sS]|[yY])+$ ]]; then
       for d in "${hiddendirs[@]}"; do
         echo -e "Deleting: $d"
-        rm -r "$d"
+        rm -f -r "$d"
       done
     fi
   fi
@@ -72,7 +72,7 @@ findAndExtractArchives () {
       fi
 
       extractOk=`echo "$doExtract" | grep -o "Everything is Ok"`
-      if [ "$extractOk" != "" ]; then rm "$arch"; fi
+      if [ "$extractOk" != "" ]; then rm -f "$arch"; fi
     done
   fi
 }
@@ -301,12 +301,15 @@ formatAlbum () {
 }
 
 #-----------------------------------------------------------------------#
-# $1=artist $2=path $3=matchAlbum
+# $1=artist $2=path $3=matchAlbum $4=fileExt
 
 updatePath () {
   if [ "$writeMode" = "1" ]; then
     mYear=`echo "$3" | grep -o "^[0-9]\{4\}"`
     newPath="$rootPath/$1/$mYear/$3"
+
+    # add FLAC to path if that is file extension
+    if [ "$4" = "FLAC" ]; then newPath="$newPath - FLAC"; fi
 
     if [ ! -d "$rootPath/$1/$mYear" ]; then
       mkdir "$rootPath/$1/$mYear"
@@ -334,7 +337,7 @@ updatePath () {
       if [ "${#parentDirs[@]}" -gt "1" ]; then
         parentDir=""
       else
-        rm -r "$rootPath/$1/$parentDir"
+        rm -f -r "$rootPath/$1/$parentDir"
         parentDir=`echo "$parentDir" | grep -o ".*\/" | sed -e "s/\/$//"`
       fi
     done
@@ -346,16 +349,16 @@ updatePath () {
 # conver & return smallest
 
 convertArt () {
-  if [ -f "$1/folder-c.jpg" ]; then rm "$1/folder-c.jpg"; fi
+  if [ -f "$1/folder-c.jpg" ]; then rm -f "$1/folder-c.jpg"; fi
 
   # optimize folder.jpg to 500px @ 90% quality
   convert "$1/folder.jpg" -resize 500 -quality 90 "$1/folder-c.jpg"
 
   # if converted file size is smaller
   if [ $(stat -c%s "$1/folder-c.jpg") -lt $(stat -c%s "$1/folder.jpg") ]; then
-    rm "$1/folder.jpg"; mv "$1/folder-c.jpg" "$1/folder.jpg"
+    rm -f "$1/folder.jpg"; mv "$1/folder-c.jpg" "$1/folder.jpg"
   else
-    rm "$1/folder-c.jpg"
+    rm -f "$1/folder-c.jpg"
   fi
 }
 
@@ -367,7 +370,7 @@ handleArtwork () {
 
   # rename folder.jpg if it exists
   if [ -f "$1/folder.jpg" ]; then
-    if [ -f "$1/folder-orig.jpg" ]; then rm "$1/folder-orig.jpg"; fi
+    if [ -f "$1/folder-orig.jpg" ]; then rm -f "$1/folder-orig.jpg"; fi
     mv "$1/folder.jpg" "$1/folder-orig.jpg"
   fi
 
@@ -411,12 +414,14 @@ handleArtwork () {
 matchTitle () {
   newT="$1"; discTag=""
 
+  echo "'$newT'" >/tmp/emcc
+
   # file pattern: 's01t01', 'd01t01' OR 's1 01' OR 'd301'
   p1=`echo "$newT" | grep -io '^\(s\|d\)[0-9]\{1,2\}[-t_\.\s]*[0-9]\+'`
   if [ "$p1" != "" ]; then
     newT=`echo "$newT" | sed 's/^\(s\|d\)//'`
     discTag=`echo "$newT" | grep -o "^[0-9]\+"`
-    if [ "discTag" != "" ] && [ "${#discTag}" -gt "2" ]; then
+    if [ "discTag" != "" ] && [ "${#discTag}" -gt "1" ]; then
       if [ "${#discTag}" -eq "3" ]; then
         discTag=`echo "$discTag" | grep -o "^[0-9]\{1\}"`
         newT=`echo "$newT" | sed -e "s/^[0-9]\{1\}//"`
@@ -424,6 +429,8 @@ matchTitle () {
         discTag=`echo "$discTag" | grep -o "^[0-9]\{2\}"`
         newT=`echo "$newT" | sed -e "s/^[0-9]\{2\}//"`
       fi
+    else
+      newT=`echo "$newT" | sed -e "s/^[0-9]\{1\}//"`
     fi
 
     newT=`echo "$newT" | sed -e "s/^[-t_\.\s]*//i"`
@@ -454,7 +461,7 @@ matchTitle () {
 }
 
 #-----------------------------------------------------------------------#
-# $1=path $2=artist $3=album $4=toConvert
+# $1=path $2=artist $3=album
 
 updateTags () {
   IFS=$'\n'; files=(`findAudio "$rootPath/$2/$1"`); unset IFS
@@ -477,7 +484,12 @@ updateTags () {
       # replace 'The' if matches similarily
       cA=`echo "$2" | sed -e "s/^the //i" -e "s/, the$//i"`
       if [[ $artistTag == *"$cA"* ]]; then
-        artistTag="$cA"
+        matchSpace=`echo "$cA" | grep -o "\s\+"`
+        if [ "$matchSpace" != "" ]; then
+          artistTag="$cA"
+        else
+          artistTag="$cA, The"
+        fi
       fi
     fi
 
@@ -555,7 +567,7 @@ updateTags () {
     if [ "$writeMode" = "1" ]; then
       # actually update the tag
       writeAudio "$f" "$artistTag" "$3" "$titleTag" "$trackTag" \
-      "$discTag" "$coverArt" "$4"
+      "$discTag" "$coverArt"
     fi
 
     echo "$discTag $trackTag - $titleTag - $3 - $artistTag"
@@ -563,20 +575,23 @@ updateTags () {
 }
 
 #-----------------------------------------------------------------------#
-# $1=file $2=artist $3=album $4=title $5=track $6=disc $7=artwork $8=toConvert
+# $1=file $2=artist $3=album $4=title $5=track $6=disc $7=artwork
 
 writeAudio () {
   parentPath=`echo "$1" | grep -o ".*\/"`
 
-  if [ "$8" != "" ]; then
-    # we are converting to mp3
+  # pull file extension from end of file path
+  ext=`echo "$1" | grep -o "\.[A-Za-z0-9]\+$" | sed -e "s/^\.//" -e "s/./\L&/g"`
+
+  # skip if on keep list, else convert
+  skipKeep=`onKeepList "$rootPath/$1/$2"`
+  if [ "$ext" = "mp3" -o "$skipKeep" != "" ]; then
+    convert="-c:a copy"
+  else
+    echo -e "Converting: '$ext' to 'mp3'"
     ext="mp3"
     # convert using V0; TODO: add option for 320CBR
     convert="-codec:a libmp3lame -qscale:a 0"
-  else
-    # pull file extension from end of file path
-    ext=`echo "$1" | grep -o "\.[A-Za-z0-9]\+$" | sed -e "s/^\.//"`
-    convert="-c:a copy"
   fi
 
   file="$parentpath"
@@ -585,7 +600,7 @@ writeAudio () {
   file=`trimEnds "$file$5 - $4"`; file="/tmp/$file.$ext"
 
   # remove tmp file if exists
-  if [ -f "$file" ]; then rm "$file"; fi
+  if [ -f "$file" ]; then rm -f "$file"; fi
 
   # use id3v2 if not FLAC/OGG
   ffmpegArgs=""
@@ -615,7 +630,7 @@ writeAudio () {
     fileSize=`stat -c%s "$file"`
     if [ "$fileSize" -gt "0" ]; then
       # remove the original; copy the new in place
-      rm "$1"; mv "$file" "$parentPath/"
+      rm -f "$1"; mv "$file" "$parentPath/"
     fi
   fi
 }
@@ -820,38 +835,21 @@ processDirectory () {
       matchAlbum=`matchDiscInternal "$matchAlbum" "1"`
 
       # add audio file .ext to path if bitrate >320
-      toConvert=""
       ext=`getFileExt "${files[0]}"`
-      bitrate=`getBitrate "${files[0]}"`
-
-      # high bitrate must be flac/alac/wav/shn/etc
-      if [ "$bitrate" -gt "420000" ]; then
-        # skip if on keep list, else convert
-        skipKeep=`onKeepList "$rootPath/$1/$2"`
-        if [ "$skipKeep" = "" ]; then
-          echo -e "Converting: '$ext' to 'MP3'"
-          toConvert="true"
-        fi
-      fi
 
       # check album tag
-      if [ "$albumTag" != "$matchAlbum" -o "$toConvert" != "" ]; then
-        updateTags "$2" "$1" "$matchAlbum" "$toConvert"
-      fi
-
-      if [ "$bitrate" -gt "420000" ] && [ "$toConvert" = "" ]; then
-        # add file extension to HQ audio to keep
-        matchAlbum="$matchAlbum - $ext"
+      if [ "$albumTag" != "$matchAlbum" ]; then
+        updateTags "$2" "$1" "$matchAlbum"
       fi
 
       # check folder name
       mYear=`echo "$matchAlbum" | grep -o "^[0-9]\{4\}"`
-      matchFolder=`echo "$2" | sed -e "s/ ([0-9]\+)$//"`
+      matchFolder=`echo "$2" | sed -e "s/ ([0-9]\+)$//" -e "s/ - $ext$//"`
       if [ "$mYear/$matchAlbum" != "$matchFolder" ]; then
-        echo -e "path: update to: '$matchAlbum'"
-        newPath=`updatePath "$1" "$2" "$matchAlbum"`
+        echo -e "path: update to: '$mYear/$matchAlbum'"
+        newPath=`updatePath "$1" "$2" "$matchAlbum" "$ext"`
       else
-        newPath="$matchFolder"
+        newPath="$2"
       fi
 
       # add to processed list
