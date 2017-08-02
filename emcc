@@ -499,7 +499,7 @@ updateTags () {
       if [ "$matchSpace" = "" ]; then artistTag="$artistTag, The"; fi
     fi
 
-    # replace 'Dead and Company' with 'Dead & Company' if that's artist dir
+    # replace 'So and So' with 'So & So' if match
     if [ "$(echo $2 | grep -o '&')" != "" ]; then
       mAnd=`echo "$artistTag" | sed -e "s/ and / \& /ig"`
       if [ "$mAnd" = "$2" ]; then artistTag="$mAnd"; fi
@@ -609,7 +609,15 @@ writeAudio () {
     if [ "$bitR" -eq "320" ] && [ "$bitrate" -gt "320000" ]; then
       convert="$convert -b:a 320k"
     else
-      convert="$convert -qscale:a 0"
+      if [ "$bitrate" -gt "250000" ]; then
+        convert="$convert -qscale:a 0"
+      elif [ "$bitrate" -gt "210000" ]; then
+        convert="$convert -qscale:a 1"
+      elif [ "$bitrate" -gt "175000" ]; then
+        convert="$convert -qscale:a 3"
+      else
+        convert="$convert -qscale:a 5"
+      fi
     fi
   fi
 
@@ -906,7 +914,9 @@ onKeepList () {
     IFS=$'\n'; kPaths=(`cat "$rootPath/.emcc-keep"`); unset IFS
     found=""
     for keep in "${kPaths[@]}"; do
-      if [[ $1 == *"$keep"* ]]; then found="$1"; break; fi
+      if [ "$(echo $keep | grep -io '[A-Z]\+')" != "" ]; then
+        if [[ $1 == *"$keep"* ]]; then found="$1"; break; fi
+      fi
     done
     if [ "$found" != "" ]; then echo "$found"; fi
   fi
