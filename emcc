@@ -958,7 +958,7 @@ processIndex () {
       fi
     else
       # make sure directory path still exists
-      if [ -d "$rootPath/$p" ]; then
+      if [ "$artist" != "" ] && [ -d "$rootPath/$p" ]; then
         # trim artist/ from path
         p=`echo "$p" | sed -r "s/^.{${#artist}}\///"`
         processDirectory "$artist" "$p"

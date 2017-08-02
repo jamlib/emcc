@@ -63,6 +63,12 @@ Any subdirectories containg characters aside from `A-Z` `0-9` or `,' &` will be 
 
 Thus, folders can be skipped by naming something like: `Band - Unorganized` since the `-` will cause it to skip.
 
+Thus, for this example, use:
+
+```
+emcc "/media/ExternalHD/Music"
+```
+
 ### Mode
 
 When `mode` is `0` or `blank`, the process will run in simulation and not make any changes.
@@ -75,12 +81,12 @@ Bitrate options are either `blank` which defaults to `256`, `256` or `320`.
 
 `256` is encoded `V0` variable bitrate with `lame` encoder. `320` encodes to constant bitrate.
 
-## Keep Certain in FLAC
+## Keep Certain Files in FLAC Format
 
-By default the script converts high quality to good quality mp3, but to skip this from happening, create a file in the `path` directory named `.emcc-keep`.  Within this file, match what you want to skip like:
+By default the script converts high quality to good quality mp3, but to stop this from happening to `FLAC` files, create a file in the `path` directory named `.emcc-keep`.  Within this file, match what you want to skip like:
 
 .emcc-keep
-````
+```
 Band 1
 Band 2/2000/2000.12.31 New Years
 ```
