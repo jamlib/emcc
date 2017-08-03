@@ -148,12 +148,18 @@ id3Get () {
 
 getBitrate () {
   bitrate=`ffprobe -v error -show_entries format=bit_rate "$1" 2>&1 | \
-  grep -o "bit_rate=[0-9]\+" | sed -e "s/bit_rate=//"`
+  grep -o "bit_rate=.\+" | sed -e "s/bit_rate=//"`
 
-  if [ "$bitrate" = "" ]; then
-    echo "0"
+  if [ "$bitrate" = "N/A" ]; then
+    # default to high bitrate (SHN files)
+    echo "321000"
   else
-    echo "$bitrate"
+    bitrate=`echo "$bitrate" | grep -o "^[0-9]\+"`
+    if [ "$bitrate" = "" ]; then
+      echo "0"
+    else
+      echo "$bitrate"
+    fi
   fi
 }
 
